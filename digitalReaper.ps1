@@ -106,8 +106,6 @@ function Show-CompletionBanner {
     }
 
     Write-Host ""
-    Write-Host "[✓] PROD BY WHEEZY | REAPER MISSION ACCOMPLISHED." -ForegroundColor Red
-    Write-Host ""
 }
 
 function Get-UrlsFromFile {
@@ -335,12 +333,6 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--no-warnings")
     $ytDlpArgs.Add("--no-call-home")
     $ytDlpArgs.Add("--console-title")
-
-    # Per-type download archive so the tool remembers what you've already taken
-    $archiveFileName = if ($DownloadType -eq "audio") { "yt-dlp-archive-audio.txt" } else { "yt-dlp-archive-video.txt" }
-    $archivePath = Join-Path $script:EngineDir $archiveFileName
-    $ytDlpArgs.Add("--download-archive")
-    $ytDlpArgs.Add($archivePath)
 
     Show-ProgressUpdate "[+] REAPER output optimization enabled" -Type "Success"
 
