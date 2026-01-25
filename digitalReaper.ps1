@@ -333,6 +333,39 @@ function Get-SanitizedUrls {
 # ===================================================================
 
 function Get-UrlsSmartMode {
+    # If a config/manifest file was passed, and it contains a `links` field, use that first
+    if ($ConfigFile -and (Test-Path $ConfigFile)) {
+        try {
+            $configData = Get-Content $ConfigFile | ConvertFrom-Json
+            if ($configData.PSObject.Properties.Name -contains "links" -and $configData.links) {
+                $urlsFromConfig = @()
+
+                if ($configData.links -is [System.Collections.IEnumerable] -and -not ($configData.links -is [string])) {
+                    foreach ($link in $configData.links) {
+                        $link = [string]$link
+                        $link = $link.Trim()
+                        if (-not [string]::IsNullOrWhiteSpace($link)) {
+                            $urlsFromConfig += $link
+                        }
+                    }
+                } else {
+                    $singleLink = [string]$configData.links
+                    $singleLink = $singleLink.Trim()
+                    if (-not [string]::IsNullOrWhiteSpace($singleLink)) {
+                        $urlsFromConfig += $singleLink
+                    }
+                }
+
+                if ($urlsFromConfig.Count -gt 0) {
+                    Show-ProgressUpdate "[+] Loaded $($urlsFromConfig.Count) targets from manifest: $ConfigFile" -Type "System"
+                    return $urlsFromConfig
+                }
+            }
+        } catch {
+            Show-ProgressUpdate "[!] Failed to read links from manifest: $ConfigFile. Falling back to standard input methods." -Type "Warning"
+        }
+    }
+
     if ($LinksFile -and (Test-Path $LinksFile)) {
         Show-ProgressUpdate "[+] Processing file from batch: $LinksFile" -Type "System"
         return Get-UrlsFromFile -FilePath $LinksFile
