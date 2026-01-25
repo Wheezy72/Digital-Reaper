@@ -38,10 +38,6 @@ autoUpdate:
 - true  = Automatically update yt-dlp when available
 - false = Never update automatically
 
-silentMode:
-- false = Show all download progress
-- true  = Minimal output (quiet mode)
-
 TIPS:
 - Restart Digital Reaper after changing settings
 - Keep backup of working settings.json
