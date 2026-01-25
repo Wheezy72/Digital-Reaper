@@ -76,51 +76,21 @@ function Show-ProgressUpdate {
 }
 
 function Show-StartupSequence {
-    $digitalReaperArt = @'
-@@@@@@@   @@@   @@@@@@@@  @@@  @@@@@@@   @@@@@@   @@@          @@@@@@@   @@@@@@@@   @@@@@@   @@@@@@@   @@@@@@@@  @@@@@@@   
-@@@@@@@@  @@@  @@@@@@@@@  @@@  @@@@@@@  @@@@@@@@  @@@          @@@@@@@@  @@@@@@@@  @@@@@@@@  @@@@@@@@  @@@@@@@@  @@@@@@@@  
-@@!  @@@  @@!  !@@        @@!    @@!    @@!  @@@  @@!          @@!  @@@  @@!       @@!  @@@  @@!  @@@  @@!       @@!  @@@  
-!@!  @!@  !@!  !@!        !@!    !@!    !@!  @!@  !@!          !@!  @!@  !@!       !@!  @!@  !@!  @!@  !@!       !@!  @!@  
-@!@  !@!  !!@  !@! @!@!@  !!@    @!!    @!@!@!@!  @!!          @!@!!@!   @!!!:!    @!@!@!@!  @!@@!@!   @!!!:!    @!@!!@!   
-!@!  !!!  !!!  !!! !!@!!  !!!    !!!    !!!@!!!!  !!!          !!@!@!    !!!!!:    !!!@!!!!  !!@!!!    !!!!!:    !!@!@!    
-!!:  !!!  !!:  :!!   !!:  !!:    !!:    !!:  !!!  !!:          !!: :!!   !!:       !!:  !!!  !!:       !!:       !!: :!!   
-:!:  !:!  :!:  :!:   !::  :!:    :!:    :!:  !:!   :!:         :!:  !:!  :!:       :!:  !:!  :!:       :!:       :!:  !:!  
- :::: ::   ::   ::: ::::   ::     ::    ::   :::   :: ::::     ::   :::   :: ::::  ::   :::   ::        :: ::::  ::   :::  
-:: :  :   :     :: :: :   :       :      :   : :  : :: : :      :   : :  : :: ::    :   : :   :        : :: ::    :   : :  
-'@
-    
-    # Purple to Blue gradient display
-    $lines = $digitalReaperArt -split "`n"
-    $lineCount = $lines.Count
-    
-    for ($i = 0; $i -lt $lineCount; $i++) {
-        $ratio = if ($lineCount -gt 1) { $i / ($lineCount - 1) } else { 0 }
-        
-        # Purple (128,0,128) to Blue (0,0,255) gradient
-        $r = [math]::Round(128 + ((0 - 128) * $ratio))
-        $g = [math]::Round(0 + ((0 - 0) * $ratio))
-        $b = [math]::Round(128 + ((255 - 128) * $ratio))
-        
-        # Use PowerShell color fallback for compatibility
-        $colors = @("Magenta", "DarkMagenta", "Blue", "DarkBlue", "Blue")
-        $colorIndex = [math]::Floor($ratio * ($colors.Count - 1))
-        $color = $colors[$colorIndex]
-        
-        Write-Host $lines[$i] -ForegroundColor $color
-        Start-Sleep -Milliseconds 50
-    }
-    
     Write-Host ""
+    Write-Host "==================================================" -ForegroundColor DarkCyan
+    Write-Host "               DIGITAL REAPER ONLINE              " -ForegroundColor Cyan
+    Write-Host "           Target acquisition initialized         " -ForegroundColor DarkCyan
+    Write-Host "==================================================" -ForegroundColor DarkCyan
     Write-Host ""
 }
 
 function Show-CompletionBanner {
-    Write-Host "`n"
-    Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor "Green"
-    Write-Host "                    MISSION STATUS: COMPLETE                     " -ForegroundColor "Green"
-    Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor "Green"
     Write-Host ""
-    
+    Write-Host "==================================================" -ForegroundColor Green
+    Write-Host "               MISSION STATUS: COMPLETE           " -ForegroundColor Green
+    Write-Host "==================================================" -ForegroundColor Green
+    Write-Host ""
+
     $prodByWheezy = @'
     ____                 __   __             _       ____                         
    / __ \_______  ____/ /  / /_  __  __   | |     / / /_  ___  ___  ____  __  __
@@ -129,24 +99,14 @@ function Show-CompletionBanner {
 /_/   /_/   \____/\__,_/  /_.___/\__, /     |__/|__/_/ /_/\___/\___/ /___/\__, /  
                                 /____/                                   /____/
 '@
-    
-    # Purple to Blue gradient for completion banner
+
     $lines = $prodByWheezy -split "`n"
-    $lineCount = $lines.Count
-    
-    for ($i = 0; $i -lt $lineCount; $i++) {
-        $ratio = if ($lineCount -gt 1) { $i / ($lineCount - 1) } else { 0 }
-        
-        # Purple to Blue gradient
-        $colors = @("Magenta", "DarkMagenta", "Blue", "DarkBlue", "Blue")
-        $colorIndex = [math]::Floor($ratio * ($colors.Count - 1))
-        $color = $colors[$colorIndex]
-        
-        Write-Host $lines[$i] -ForegroundColor $color
+    foreach ($line in $lines) {
+        Write-Host $line -ForegroundColor Magenta
     }
-    
+
     Write-Host ""
-    Write-Host "[✓] GOING DARK. REAPER MISSION ACCOMPLISHED." -ForegroundColor "Red"
+    Write-Host "[✓] PROD BY WHEEZY | REAPER MISSION ACCOMPLISHED." -ForegroundColor Red
     Write-Host ""
 }
 
@@ -375,6 +335,12 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--no-warnings")
     $ytDlpArgs.Add("--no-call-home")
     $ytDlpArgs.Add("--console-title")
+
+    # Per-type download archive so the tool remembers what you've already taken
+    $archiveFileName = if ($DownloadType -eq "audio") { "yt-dlp-archive-audio.txt" } else { "yt-dlp-archive-video.txt" }
+    $archivePath = Join-Path $script:EngineDir $archiveFileName
+    $ytDlpArgs.Add("--download-archive")
+    $ytDlpArgs.Add($archivePath)
 
     Show-ProgressUpdate "[+] REAPER output optimization enabled" -Type "Success"
 
