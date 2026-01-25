@@ -14,7 +14,7 @@ Made by **Wheezy**
 - **🔧 HEVC/H.265** - Better compression, smaller files
 - **⚙️ JSON Settings** - Customizable configuration
 - **🔄 Auto-Updates** - Latest yt-dlp versions
-- **📁 Drag & Drop** - Drop links.txt on launcher
+- **📁 Drag & Drop** - Drop a `.txt` links file or `.json` manifest on the launcher
 - **🎨 Beautiful Interface** - Purple-blue gradient ASCII art
 - **🔒 Clean Directory** - Auto-hides technical files
 
@@ -22,42 +22,111 @@ Made by **Wheezy**
 
 ## 🚀 Quick Start
 
-### **Method 1: Simple Double-Click**
-1. **Download** this repository
-2.**Run** `cleanup.bat` once after setup
-3. **Double-click** `digitalReaper.bat`
-4. **Enter URLs** or load from file
-5. **Enjoy!** Downloads appear in `downloads/` folder
+### 1. One-time engine setup
 
-### **Method 2: Drag & Drop**
-1. **Create** `links.txt` with URLs (one per line)
-2. **Drag** `links.txt` onto `digitalReaper.bat`
-3. **Automatic download** starts immediately
+1. **Download** this repository
+2. **Run** `initDigitalReaper.ps1` (right-click → “Run with PowerShell”)  
+   - This creates the `engine/` folder  
+   - Downloads **yt-dlp.exe** and **ffmpeg.exe** into `engine/`  
+   - Cleans up and deletes itself
+3. (Optional) **Run** `cleanup.bat` once to hide internal files and keep the folder tidy
+
+After that, your visible root is basically:
+
+- `digitalReaper.bat` (launcher)
+- `settings.json` (config)
+- `audioLinks.txt` / `videoLinks.txt` (optional)
+- `downloads\`
+- `README.md`
+
+### 2. Simple batch mode (zero interaction)
+
+1. Put **audio-only URLs** in `audioLinks.txt` (one per line)
+2. Put **video URLs** in `videoLinks.txt` (one per line)
+3. **Double-click** `digitalReaper.bat`
+
+Digital Reaper will:
+
+- Auto-detect `audioLinks.txt` / `videoLinks.txt`
+- Download:
+  - audio → `downloads\audio\`
+  - video → `downloads\videos\`
+- Remove **only** successfully downloaded lines from the text files  
+  (failed URLs stay for the next run)
+
+### 3. Manifest / job file mode (per-job settings)
+
+1. Create a JSON file, e.g. `job_1080_hevc.json`:
+
+   ```json
+   {
+     "downloadType": "video",
+     "videoQuality": "1080p",
+     "useHEVC": true,
+     "downloadSubtitles": true,
+     "subtitleLanguages": ["en", "en-US"],
+     "outputTemplate": "%(uploader)s/[%(upload_date)s] %(title)s [%(id)s].%(ext)s",
+     "links": [
+       "https://www.youtube.com/watch?v=AAA",
+       "https://youtu.be/BBB"
+     ]
+   }
+   ```
+
+2. **Drag** this `.json` file onto `digitalReaper.bat`
+
+Digital Reaper will:
+
+- Load the settings from the manifest (overriding defaults where specified)
+- Download all URLs under `links` to the normal `downloads\` folder
+
+### 4. Interactive mode
+
+If you run `digitalReaper.bat` with **no** `audioLinks.txt`/`videoLinks.txt` and **no** manifest or links file dropped:
+
+1. Script starts in interactive mode
+2. Choose:
+   - Manual single URL  
+   - Load URLs from a `.txt` file
+3. Downloads go to `downloads\` using `settings.json` defaults
 
 ---
 
 ## ⚙️ Configuration
 
-Edit `settings.json` to customize behavior:
+Edit `settings.json` to customize behavior.
 
-See `downloads/settings-guide.txt` for full configuration guide.
+There are three main entry points:
+
+1. **Global defaults** – `settings.json` at the project root
+2. **Per-job manifest** – any `.json` file you drop on `digitalReaper.bat`  
+   (same shape as `settings.json`, plus a `links` field)
+3. **Batch link files** – `audioLinks.txt` and `videoLinks.txt` in the root
+
+For a description of each setting, see `downloads/settings.txt`.
 
 ---
 
 ## 📁 File Structure
 
 📁 DigitalReaper/
-├── 📄 digitalReaper.bat (🎯 Main launcher)
-├── 📄 settings.json (⚙️ Configuration)
-├── 📄 README.md (📖 This file)
-└── 📁 downloads/ (📥 Output folder)
-└── 📄 settings-guide.txt (📋 Help file)
+├── 📄 digitalReaper.bat       (🎯 Main launcher)
+├── 📄 digitalReaper.ps1       (👻 Main PowerShell engine – usually hidden)
+├── 📄 settings.json           (⚙️ Global configuration)
+├── 📄 audioLinks.txt          (🎵 Batch audio URLs – optional)
+├── 📄 videoLinks.txt          (📼 Batch video URLs – optional)
+├── 📄 initDigitalReaper.ps1   (🚀 One-time engine bootstrap – self-deletes)
+├── 📄 cleanup.bat             (🧹 Hides internal files for a clean view)
+├── 📄 README.md               (📖 This file)
+├── 📁 engine/                 (⚙️ Internal binaries)
+│   ├── yt-dlp.exe             (Downloader binary)
+│   └── ffmpeg.exe             (Media processing binary)
+└── 📁 downloads/              (📥 Output folder)
+    ├── audio/                 (Extracted audio)
+    └── videos/                (Video files)
 
-Hidden files (auto-managed):
-├── 👻 digitalReaper.ps1
-├── 👻 yt-dlp.exe
-├── 👻 links.txt
-└── 👻 bin/ffmpeg.exe
+Extra helper:
+- `downloads/settings.txt` – human-readable guide to all `settings.json` options
 
 text
 

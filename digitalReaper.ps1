@@ -198,15 +198,14 @@ function Ensure-Directory {
 
 function Get-DefaultSettings {
     return @{
-        downloadType = "video"
-        videoQuality = "1080p"
-        audioFormat = "mp3"
-        useHEVC = $true
+        downloadType      = "video"
+        videoQuality      = "1080p"
+        audioFormat       = "mp3"
+        useHEVC           = $true
         downloadSubtitles = $true
         subtitleLanguages = @("en", "en-US")
-        outputTemplate = "%(uploader)s/[%(upload_date)s] %(title)s [%(id)s].%(ext)s"
-        autoUpdate = $true
-        silentMode = $false
+        outputTemplate    = "%(uploader)s/[%(upload_date)s] %(title)s [%(id)s].%(ext)s"
+        autoUpdate        = $true
     }
 }
 
@@ -353,17 +352,83 @@ function Get-SanitizedUrls {
 # --- YT-DLP ARGUMENT BUILDER & BATCH HELPERS ---
 # ===================================================================
 
-# NOTE:
-# Earlier versions of this script used generic helper functions
-# (New-YtDlpArgs, Process-LinksFile, Process-BatchLinkFiles) to
-# assemble yt-dlp arguments and process link files.
-#
-# The current version inlines that logic directly in:
-#   - Process-LinkFile   (audioLinks.txt / videoLinks.txt batches)
-#   - The main execution path (interactive / manifest mode)
-#
-# This keeps behavior identical while reducing indirection and
-# making the flow easier to follow.
+function Get-YtDlpArgs {
+    param(
+        [hashtable]$Settings,
+        [string]$DownloadType,   # "audio" or "video"
+        [string]$OutputDir
+    )
+
+    $ytDlpArgs = New-Object System.Collections.Generic.List[string]
+
+    # Core robustness / tuning
+    $ytDlpArgs.Add("--ffmpeg-location")
+    $ytDlpArgs.Add($script:BinDir)
+    $ytDlpArgs.Add("--fragment-retries")
+    $ytDlpArgs.Add("infinite")
+    $ytDlpArgs.Add("--retry-sleep")
+    $ytDlpArgs.Add("fragment:exp=1:300")
+    $ytDlpArgs.Add("--sleep-interval")
+    $ytDlpArgs.Add("3")
+    $ytDlpArgs.Add("--max-sleep-interval")
+    $ytDlpArgs.Add("7")
+    $ytDlpArgs.Add("--no-warnings")
+    $ytDlpArgs.Add("--no-call-home")
+    $ytDlpArgs.Add("--console-title")
+
+    Show-ProgressUpdate "[+] REAPER output optimization enabled" -Type "Success"
+
+    if ($DownloadType -eq "video" -and $Settings.downloadSubtitles) {
+        Show-ProgressUpdate "Subtitle extraction enabled" -Type "Success"
+        $ytDlpArgs.Add("--write-auto-sub")
+        $ytDlpArgs.Add("--write-sub")
+        $ytDlpArgs.Add("--sub-lang")
+        $ytDlpArgs.Add(($Settings.subtitleLanguages -join ","))
+        $ytDlpArgs.Add("--convert-subs")
+        $ytDlpArgs.Add("srt")
+    }
+
+    if ($DownloadType -eq "audio") {
+        Write-TypeWriter -Text "[*] REAPER configuring for audio-only exfiltration..." -Color "Yellow" -Speed 30
+        $ytDlpArgs.Add("--extract-audio")
+        $ytDlpArgs.Add("--audio-format")
+        $ytDlpArgs.Add($Settings.audioFormat)
+        $ytDlpArgs.Add("--audio-quality")
+        $ytDlpArgs.Add("0")
+    } else {
+        $codecPreference = if ($Settings.useHEVC) { "[vcodec^=hevc]/[vcodec^=h265]/" } else { "" }
+
+        $height = switch ($Settings.videoQuality) {
+            "720p"  { 720 }
+            "1080p" { 1080 }
+            "1440p" { 1440 }
+            "4K"    { 2160 }
+            default { 1080 }
+        }
+
+        Write-TypeWriter -Text "[*] REAPER configuring for $($Settings.videoQuality) video stream..." -Color "Green" -Speed 30
+        $format = "($codecPreference" + "bestvideo[height<=$height])+bestaudio/best[height<=$height]"
+
+        $ytDlpArgs.Add("-f")
+        $ytDlpArgs.Add($format)
+        $ytDlpArgs.Add("--merge-output-format")
+        $ytDlpArgs.Add("mp4")
+
+        if ($Settings.useHEVC) {
+            Show-ProgressUpdate "HEVC/H.265 codec preference enabled" -Type "Success"
+        }
+    }
+
+    $outputTemplate = Join-Path -Path $OutputDir -ChildPath $Settings.outputTemplate
+    $ytDlpArgs.Add("-o")
+    $ytDlpArgs.Add($outputTemplate)
+
+    Show-ProgressUpdate "Enhanced metadata filename structure enabled" -Type "Success"
+    Write-Host "    Output: " -NoNewline -ForegroundColor "Gray"
+    Write-Host $OutputDir -ForegroundColor "Yellow"
+
+    return $ytDlpArgs
+}
 
 # ===================================================================
 # --- SMART URL DETECTION ---
@@ -501,72 +566,7 @@ function Process-LinkFile {
         }
     }
 
-    $ytDlpArgs = New-Object System.Collections.Generic.List[string]
-
-    $ytDlpArgs.Add("--ffmpeg-location")
-    $ytDlpArgs.Add($script:BinDir)
-    $ytDlpArgs.Add("--fragment-retries")
-    $ytDlpArgs.Add("infinite")
-    $ytDlpArgs.Add("--retry-sleep")
-    $ytDlpArgs.Add("fragment:exp=1:300")
-    $ytDlpArgs.Add("--sleep-interval")
-    $ytDlpArgs.Add("3")
-    $ytDlpArgs.Add("--max-sleep-interval")
-    $ytDlpArgs.Add("7")
-    $ytDlpArgs.Add("--no-warnings")
-    $ytDlpArgs.Add("--no-call-home")
-    $ytDlpArgs.Add("--console-title")
-
-    Show-ProgressUpdate "[+] REAPER output optimization enabled for $DownloadType batch" -Type "Success"
-
-    if ($Settings.downloadSubtitles -and $DownloadType -eq "video") {
-        Show-ProgressUpdate "Subtitle extraction enabled" -Type "Success"
-        $ytDlpArgs.Add("--write-auto-sub")
-        $ytDlpArgs.Add("--write-sub")
-        $ytDlpArgs.Add("--sub-lang")
-        $ytDlpArgs.Add(($Settings.subtitleLanguages -join ","))
-        $ytDlpArgs.Add("--convert-subs")
-        $ytDlpArgs.Add("srt")
-    }
-
-    if ($DownloadType -eq "audio") {
-        Write-TypeWriter -Text "[*] REAPER configuring for audio-only exfiltration..." -Color "Yellow" -Speed 30
-        $ytDlpArgs.Add("--extract-audio")
-        $ytDlpArgs.Add("--audio-format")
-        $ytDlpArgs.Add($Settings.audioFormat)
-        $ytDlpArgs.Add("--audio-quality")
-        $ytDlpArgs.Add("0")
-    } else {
-        $codecPreference = if ($Settings.useHEVC) { "[vcodec^=hevc]/[vcodec^=h265]/" } else { "" }
-
-        $height = switch ($Settings.videoQuality) {
-            "720p" { 720 }
-            "1080p" { 1080 }
-            "1440p" { 1440 }
-            "4K" { 2160 }
-            default { 1080 }
-        }
-
-        Write-TypeWriter -Text "[*] REAPER configuring for $($Settings.videoQuality) video stream..." -Color "Green" -Speed 30
-        $format = "($codecPreference" + "bestvideo[height<=$height])+bestaudio/best[height<=$height]"
-
-        $ytDlpArgs.Add("-f")
-        $ytDlpArgs.Add($format)
-        $ytDlpArgs.Add("--merge-output-format")
-        $ytDlpArgs.Add("mp4")
-
-        if ($Settings.useHEVC) {
-            Show-ProgressUpdate "HEVC/H.265 codec preference enabled" -Type "Success"
-        }
-    }
-
-    $outputTemplate = Join-Path -Path $OutputDir -ChildPath $Settings.outputTemplate
-    $ytDlpArgs.Add("-o")
-    $ytDlpArgs.Add($outputTemplate)
-
-    Show-ProgressUpdate "Enhanced metadata filename structure enabled" -Type "Success"
-    Write-Host "    Output: " -NoNewline -ForegroundColor "Gray"
-    Write-Host $OutputDir -ForegroundColor "Yellow"
+    $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir
 
     Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Beginning $DownloadType batch ]---" -Color "Red" -Speed 40
     Write-Host "Target Count: " -NoNewline -ForegroundColor "White"
@@ -626,60 +626,56 @@ function Process-LinkFile {
 }
 
 # ===================================================================
-# --- MAIN EXECUTION ---
+# --- MAIN EXECUTION HELPERS ---
 # ===================================================================
 
-try {
-    Clear-Host
-    Show-StartupSequence
-
-    if (-not (Initialize-DigitalReaper)) {
-        Write-Pulse -Text "[!] DIGITAL REAPER initialization failed" -Colors @("Red", "DarkRed") -Cycles 3
-        Read-Host "Press Enter to exit..."
-        exit 1
+function Should-RunBatchMode {
+    if ($LinksFile -or $ConfigFile) {
+        return $false
     }
 
-    $settings = Load-Settings -ConfigPath $ConfigFile
-    
-    if ($settings.autoUpdate) {
-        Update-YtDlpSilent
+    return (Test-Path $script:AudioLinksFile) -or (Test-Path $script:VideoLinksFile)
+}
+
+function Run-BatchMode {
+    param(
+        [hashtable]$Settings
+    )
+
+    $batchSuccess = 0
+    $batchFailure = 0
+
+    if (Test-Path $script:AudioLinksFile) {
+        $audioResult = Process-LinkFile -FilePath $script:AudioLinksFile -Settings $Settings -DownloadType "audio" -OutputDir $script:AudioOutputDir
+        $batchSuccess += $audioResult.Success
+        $batchFailure += $audioResult.Failure
     }
 
-    # If no explicit links/config were provided, auto-process audioLinks.txt and videoLinks.txt
-    if (-not $LinksFile -and -not $ConfigFile -and ((Test-Path $script:AudioLinksFile) -or (Test-Path $script:VideoLinksFile))) {
-        $batchSuccess = 0
-        $batchFailure = 0
-
-        if (Test-Path $script:AudioLinksFile) {
-            $audioResult = Process-LinkFile -FilePath $script:AudioLinksFile -Settings $settings -DownloadType "audio" -OutputDir $script:AudioOutputDir
-            $batchSuccess += $audioResult.Success
-            $batchFailure += $audioResult.Failure
-        }
-
-        if (Test-Path $script:VideoLinksFile) {
-            $videoResult = Process-LinkFile -FilePath $script:VideoLinksFile -Settings $settings -DownloadType "video" -OutputDir $script:VideoOutputDir
-            $batchSuccess += $videoResult.Success
-            $batchFailure += $videoResult.Failure
-        }
-
-        Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Mission Summary ]---" -Color "Cyan" -Speed 30
-        Write-Host "[+] Successful extractions: " -NoNewline -ForegroundColor "White"
-        Write-Pulse -Text "$batchSuccess" -Colors @("Green", "Cyan") -Cycles 1 -Speed 300
-        Write-Host "[!] Failed extractions:     " -NoNewline -ForegroundColor "White"
-        Write-Pulse -Text "$batchFailure" -Colors @("Red", "Yellow") -Cycles 1 -Speed 300
-        Write-Host "Downloads saved to:        " -NoNewline -ForegroundColor "White"
-        Write-Host "$script:DownloadsDir" -ForegroundColor "Yellow"
-
-        if ($batchSuccess -gt 0) {
-            Show-CompletionBanner
-        } else {
-            Write-Pulse -Text "`n[!] DIGITAL REAPER MISSION COMPROMISED: All batch targets failed." -Colors @("Red", "DarkRed") -Cycles 3
-        }
-
-        Write-Host -NoNewline "`n>> DIGITAL REAPER session complete. Press Enter to go dark..." -ForegroundColor "Yellow"
-        Read-Host | Out-Null
-        return
+    if (Test-Path $script:VideoLinksFile) {
+        $videoResult = Process-LinkFile -FilePath $script:VideoLinksFile -Settings $Settings -DownloadType "video" -OutputDir $script:VideoOutputDir
+        $batchSuccess += $videoResult.Success
+        $batchFailure += $videoResult.Failure
     }
+
+    Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Mission Summary ]---" -Color "Cyan" -Speed 30
+    Write-Host "[+] Successful extractions: " -NoNewline -ForegroundColor "White"
+    Write-Pulse -Text "$batchSuccess" -Colors @("Green", "Cyan") -Cycles 1 -Speed 300
+    Write-Host "[!] Failed extractions:     " -NoNewline -ForegroundColor "White"
+    Write-Pulse -Text "$batchFailure" -Colors @("Red", "Yellow") -Cycles 1 -Speed 300
+    Write-Host "Downloads saved to:        " -NoNewline -ForegroundColor "White"
+    Write-Host "$script:DownloadsDir" -ForegroundColor "Yellow"
+
+    if ($batchSuccess -gt 0) {
+        Show-CompletionBanner
+    } else {
+        Write-Pulse -Text "`n[!] DIGITAL REAPER MISSION COMPROMISED: All batch targets failed." -Colors @("Red", "DarkRed") -Cycles 3
+    }
+}
+
+function Run-InteractiveMode {
+    param(
+        [hashtable]$Settings
+    )
 
     $urls = Get-UrlsSmartMode
     
@@ -689,78 +685,12 @@ try {
         exit 1
     }
     
-    # SANITIZE URLs to fix download issues
     $urls = Get-SanitizedUrls -Urls $urls
     
     Show-ProgressUpdate "Loaded $($urls.Count) targets for processing" -Type "Success"
 
-    # BUILD YT-DLP ARGUMENTS
-    $ytDlpArgs = New-Object System.Collections.Generic.List[string]
-
-    $ytDlpArgs.Add("--ffmpeg-location")
-    $ytDlpArgs.Add($script:BinDir)
-    $ytDlpArgs.Add("--fragment-retries")
-    $ytDlpArgs.Add("infinite")
-    $ytDlpArgs.Add("--retry-sleep")
-    $ytDlpArgs.Add("fragment:exp=1:300")
-    $ytDlpArgs.Add("--sleep-interval")
-    $ytDlpArgs.Add("3")
-    $ytDlpArgs.Add("--max-sleep-interval")
-    $ytDlpArgs.Add("7")
-    $ytDlpArgs.Add("--no-warnings")
-    $ytDlpArgs.Add("--no-call-home")
-    $ytDlpArgs.Add("--console-title")
-
-    Show-ProgressUpdate "[+] REAPER output optimization enabled" -Type "Success"
-
-    if ($settings.downloadSubtitles) {
-        Show-ProgressUpdate "Subtitle extraction enabled" -Type "Success"
-        $ytDlpArgs.Add("--write-auto-sub")
-        $ytDlpArgs.Add("--write-sub")
-        $ytDlpArgs.Add("--sub-lang")
-        $ytDlpArgs.Add(($settings.subtitleLanguages -join ","))
-        $ytDlpArgs.Add("--convert-subs")
-        $ytDlpArgs.Add("srt")
-    }
-
-    if ($settings.downloadType -eq "audio") {
-        Write-TypeWriter -Text "[*] REAPER configuring for audio-only exfiltration..." -Color "Yellow" -Speed 30
-        $ytDlpArgs.Add("--extract-audio")
-        $ytDlpArgs.Add("--audio-format")
-        $ytDlpArgs.Add($settings.audioFormat)
-        $ytDlpArgs.Add("--audio-quality")
-        $ytDlpArgs.Add("0")
-    } else {
-        $codecPreference = if ($settings.useHEVC) { "[vcodec^=hevc]/[vcodec^=h265]/" } else { "" }
-        
-        $height = switch ($settings.videoQuality) {
-            "720p" { 720 }
-            "1080p" { 1080 }
-            "1440p" { 1440 }
-            "4K" { 2160 }
-            default { 1080 }
-        }
-        
-        Write-TypeWriter -Text "[*] REAPER configuring for $($settings.videoQuality) video stream..." -Color "Green" -Speed 30
-        $format = "($codecPreference" + "bestvideo[height<=$height])+bestaudio/best[height<=$height]"
-        
-        $ytDlpArgs.Add("-f")
-        $ytDlpArgs.Add($format)
-        $ytDlpArgs.Add("--merge-output-format")
-        $ytDlpArgs.Add("mp4")
-
-        if ($settings.useHEVC) {
-            Show-ProgressUpdate "HEVC/H.265 codec preference enabled" -Type "Success"
-        }
-    }
-
-    $outputTemplate = Join-Path -Path $script:DownloadsDir -ChildPath $settings.outputTemplate
-    $ytDlpArgs.Add("-o")
-    $ytDlpArgs.Add($outputTemplate)
-
-    Show-ProgressUpdate "Enhanced metadata filename structure enabled" -Type "Success"
-    Write-Host "    Output: " -NoNewline -ForegroundColor "Gray"
-    Write-Host "$script:DownloadsDir" -ForegroundColor "Yellow"
+    $downloadType = $Settings.downloadType
+    $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $downloadType -OutputDir $script:DownloadsDir
 
     Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Beginning Mass Exfiltration ]---" -Color "Red" -Speed 40
     Write-Host "Target Count: " -NoNewline -ForegroundColor "White"
@@ -768,7 +698,7 @@ try {
     Write-Host "Output Folder:" -NoNewline -ForegroundColor "White" 
     Write-Host " $script:DownloadsDir" -ForegroundColor "Yellow"
     Write-Host "Quality:      " -NoNewline -ForegroundColor "White"
-    Write-Host "$($settings.videoQuality)" -ForegroundColor "Magenta"
+    Write-Host "$($Settings.videoQuality)" -ForegroundColor "Magenta"
     Write-TypeWriter -Text "-----------------------------------------------" -Color "Red" -Speed 20
 
     $successCount = 0
@@ -809,6 +739,33 @@ try {
         Show-CompletionBanner
     } else {
         Write-Pulse -Text "`n[!] DIGITAL REAPER MISSION COMPROMISED: All targets failed." -Colors @("Red", "DarkRed") -Cycles 3
+    }
+}
+
+# ===================================================================
+# --- MAIN EXECUTION ---
+# ===================================================================
+
+try {
+    Clear-Host
+    Show-StartupSequence
+
+    if (-not (Initialize-DigitalReaper)) {
+        Write-Pulse -Text "[!] DIGITAL REAPER initialization failed" -Colors @("Red", "DarkRed") -Cycles 3
+        Read-Host "Press Enter to exit..."
+        exit 1
+    }
+
+    $settings = Load-Settings -ConfigPath $ConfigFile
+    
+    if ($settings.autoUpdate) {
+        Update-YtDlpSilent
+    }
+
+    if (Should-RunBatchMode) {
+        Run-BatchMode -Settings $settings
+    } else {
+        Run-InteractiveMode -Settings $settings
     }
 
 } catch {
