@@ -13,7 +13,7 @@ echo Only essential files will remain visible after cleanup.
 echo.
 
 REM List of files and folders to keep visible
-set "VISIBLE_FILES=digitalReaper.bat settings.json README.md downloads cleanup.bat"
+set "VISIBLE_FILES=digitalReaper.bat settings.json README.md downloads cleanup.bat audioLinks.txt videoLinks.txt"
 
 echo [INFO] Starting directory cleanup...
 echo [INFO] Files to keep visible: %VISIBLE_FILES%
@@ -88,9 +88,8 @@ echo   - downloads/         ^(output folder^)
 echo.
 echo HIDDEN ITEMS:
 echo   - digitalReaper.ps1  ^(main script^)
-echo   - yt-dlp.exe         ^(downloader binary^)
-echo   - links.txt          ^(URL list^)
-echo   - bin/               ^(ffmpeg folder^)
+echo   - engine/            ^(yt-dlp and ffmpeg binaries^)
+echo   - links.txt          ^(legacy URL list, if present^)
 echo   - Other technical files
 echo.
 echo ================================================================

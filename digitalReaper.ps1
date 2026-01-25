@@ -18,12 +18,14 @@ param(
 $SCRIPT_VERSION = "1.0.0"
 $YTDLP_CURRENT_VERSION = "2024.12.06"
 
-$script:ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$script:YtDlpPath = Join-Path $script:ScriptDir "yt-dlp.exe"
-$script:FfmpegPath = Join-Path $script:ScriptDir "bin\ffmpeg.exe"
-$script:BinDir = Join-Path $script:ScriptDir "bin"
-$script:DownloadsDir = Join-Path $script:ScriptDir "downloads"
-$script:DefaultLinksFile = Join-Path $script:ScriptDir "links.txt"
+$script:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
+$script:EngineDir   = Join-Path $script:ScriptDir "engine"
+$script:YtDlpPath   = Join-Path $script:EngineDir "yt-dlp.exe"
+$script:FfmpegPath  = Join-Path $script:EngineDir "ffmpeg.exe"
+$script:BinDir      = $script:EngineDir
+
+$script:DownloadsDir      = Join-Path $script:ScriptDir "downloads"
+$script:DefaultLinksFile  = Join-Path $script:ScriptDir "links.txt"
 $script:DefaultConfigFile = Join-Path $script:ScriptDir "settings.json"
 
 # Dedicated audio/video link files + output folders
@@ -263,29 +265,35 @@ function Set-HiddenAttribute {
 function Initialize-DigitalReaper {
     Show-ProgressUpdate "[🔧] DIGITAL REAPER initializing..." -Type "System"
     
-    if (-not (Test-Path $script:BinDir)) {
-        New-Item -Path $script:BinDir -ItemType Directory -Force | Out-Null
-        Show-ProgressUpdate "[+] Created bin directory" -Type "System"
+    if (-not (Test-Path $script:EngineDir)) {
+        New-Item -Path $script:EngineDir -ItemType Directory -Force | Out-Null
+        Show-ProgressUpdate "[+] Created engine directory" -Type "System"
     }
     
     if (-not (Test-Path $script:DownloadsDir)) {
         New-Item -Path $script:DownloadsDir -ItemType Directory -Force | Out-Null
         Show-ProgressUpdate "[+] Created downloads directory" -Type "Success"
     }
+
+    # Ensure per-type output folders exist
+    Ensure-Directory -Path $script:AudioOutputDir
+    Ensure-Directory -Path $script:VideoOutputDir
     
     if (-not (Test-Path $script:YtDlpPath)) {
-        Show-ProgressUpdate "[!] yt-dlp.exe not found! Please download it from https://github.com/yt-dlp/yt-dlp/releases" -Type "Error"
+        Show-ProgressUpdate "[!] yt-dlp.exe not found in engine/!" -Type "Error"
+        Show-ProgressUpdate "[>] Run initDigitalReaper.ps1 first or download yt-dlp.exe manually into the engine folder." -Type "Warning"
         return $false
     }
     
     if (-not (Test-Path $script:FfmpegPath)) {
-        Show-ProgressUpdate "[!] ffmpeg.exe not found in bin folder! Please download it." -Type "Error"
+        Show-ProgressUpdate "[!] ffmpeg.exe not found in engine/!" -Type "Error"
+        Show-ProgressUpdate "[>] Run initDigitalReaper.ps1 first or place ffmpeg.exe manually into the engine folder." -Type "Warning"
         return $false
     }
     
     Set-HiddenAttribute -Path $script:YtDlpPath
     Set-HiddenAttribute -Path $script:FfmpegPath
-    Set-HiddenAttribute -Path $script:BinDir
+    Set-HiddenAttribute -Path $script:EngineDir
     
     Show-ProgressUpdate "[+] All DIGITAL REAPER components ready" -Type "Success"
     return $true
