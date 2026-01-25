@@ -77,10 +77,14 @@ function Show-ProgressUpdate {
 
 function Show-StartupSequence {
     Write-Host ""
-    Write-Host "==================================================" -ForegroundColor DarkCyan
-    Write-Host "               DIGITAL REAPER ONLINE              " -ForegroundColor Cyan
-    Write-Host "           Target acquisition initialized         " -ForegroundColor DarkCyan
-    Write-Host "==================================================" -ForegroundColor DarkCyan
+    Write-Host "________  .__       .__  __         .__    __________                                   " -ForegroundColor DarkRed
+    Write-Host "\______ \ |__| ____ |__|/  |______  |  |   \______   \ ____ _____  ______   ___________ " -ForegroundColor DarkRed
+    Write-Host " |    |  \|  |/ ___\|  \   __\__  \ |  |    |       _// __ \\__  \ \____ \_/ __ \_  __ \" -ForegroundColor DarkRed
+    Write-Host " |    `   \  / /_/  >  ||  |  / __ \|  |__  |    |   \  ___/ / __ \|  |_> >  ___/|  | \/" -ForegroundColor DarkRed
+    Write-Host "/_______  /__\___  /|__||__| (____  /____/  |____|_  /\___  >____  /   __/ \___  >__|   " -ForegroundColor DarkRed
+    Write-Host "        \/  /_____/               \/               \/     \/     \/|__|        \/       " -ForegroundColor DarkRed
+    Write-Host ""
+    Write-Host "                            DIGITAL REAPER: LINK HARVESTER                             " -ForegroundColor Gray
     Write-Host ""
 }
 
@@ -125,22 +129,17 @@ function Get-UrlsFromFile {
 }
 
 function Show-MenuOption {
-    param([string]$Prompt, [string]$Options, [string[]]$Colors = @("Yellow", "Magenta", "Cyan", "Green"))
-    $optionParts = $Options -split ", "
-    $colorIndex = 0
-    
-    Write-Host -NoNewline ">> $Prompt (" -ForegroundColor Yellow
-    
-    for ($i = 0; $i -lt $optionParts.Count; $i++) {
-        $color = $Colors[$colorIndex % $Colors.Count]
-        Write-Host -NoNewline $optionParts[$i] -ForegroundColor $color
-        if ($i -lt $optionParts.Count - 1) {
-            Write-Host -NoNewline ", " -ForegroundColor White
-        }
-        $colorIndex++
-    }
-    
-    Write-Host -NoNewline "): " -ForegroundColor Yellow
+    param(
+        [string]$Prompt,
+        [string]$Options
+    )
+
+    Write-Host ""
+    Write-Host "--------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host " $Prompt" -ForegroundColor Yellow
+    Write-Host " Options: $Options" -ForegroundColor Gray
+    Write-Host "--------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host -NoNewline "> " -ForegroundColor Yellow
 }
 
 function Ensure-Directory {
