@@ -1,5 +1,5 @@
 @echo off
-title DIGITAL REAPER - YouTube Harvester
+title DIGITAL REAPER
 color 0A
 
 echo ===============================================

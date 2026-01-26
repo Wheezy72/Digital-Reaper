@@ -84,8 +84,6 @@ function Show-StartupSequence {
     Write-Host "/_______  /__\___  /|__||__| (____  /____/  |____|_  /\___  >____  /   __/ \___  >__|   " -ForegroundColor DarkRed
     Write-Host "        \/  /_____/               \/               \/     \/     \/|__|        \/       " -ForegroundColor DarkRed
     Write-Host ""
-    Write-Host "                            DIGITAL REAPER: LINK HARVESTER                             " -ForegroundColor Gray
-    Write-Host ""
 }
 
 function Show-CompletionBanner {
