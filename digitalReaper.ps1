@@ -140,6 +140,28 @@ function Show-MenuOption {
     Write-Host -NoNewline "> " -ForegroundColor Yellow
 }
 
+function Select-InteractiveDownloadType {
+    param(
+        [hashtable]$Settings
+    )
+
+    $choice = ""
+
+    while ($choice -notin @("1", "2")) {
+        Show-MenuOption -Prompt "Select Output Type" -Options "1=Video, 2=Audio"
+        $choice = Read-Host
+        if ($choice -notin @("1", "2")) {
+            Write-Pulse -Text "`n[!] Invalid command. Use 1 for video or 2 for audio." -Colors @("Red", "Yellow") -Cycles 2
+        }
+    }
+
+    if ($choice -eq "2") {
+        return "audio"
+    } else {
+        return "video"
+    }
+}
+
 function Ensure-Directory {
     param([string]$Path)
     if (-not (Test-Path $Path)) {
@@ -661,7 +683,13 @@ function Run-InteractiveMode {
     
     Show-ProgressUpdate "Loaded $($urls.Count) targets for processing" -Type "Success"
 
+    # Decide audio vs video for this interactive run.
+    # If a manifest/config file is driving the run, honor its downloadType.
+    # Otherwise, ask the user and use the stored presets for that type.
     $downloadType = $Settings.downloadType
+    if (-not $ConfigFile) {
+        $downloadType = Select-InteractiveDownloadType -Settings $Settings
+    }
 
     # Route interactive jobs to the same per-type folders used by batch mode
     $outputBaseDir = if ($downloadType -eq "audio") { $script:AudioOutputDir } else { $script:VideoOutputDir }
