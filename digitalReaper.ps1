@@ -391,6 +391,9 @@ function Get-YtDlpArgs {
 
     $ytDlpArgs.Add("--continue")               # resume partial downloads if possible
     $ytDlpArgs.Add("--no-part")                # no .part files left behind
+
+    # Ensure progress is printed as lines in the terminal body as well as in the title bar
+    $ytDlpArgs.Add("--progress")
     $ytDlpArgs.Add("--newline")                # force progress output as separate lines
 
     $ytDlpArgs.Add("--no-warnings")
@@ -648,19 +651,24 @@ function Process-LinkFile {
         }
     }
 
-    $linesOut = New-Object System.Collections.Generic.List[string]
-    for ($i = 0; $i -lt $allLines.Count; $i++) {
-        $entryAtIndex = $linkEntries | Where-Object { $_.Index -eq $i } | Select-Object -First 1
-        if ($entryAtIndex) {
-            if (-not $entryAtIndex.WasSuccess) {
+    # If archive is disabled, rewrite the link file to drop successful URLs.
+    # When archive mode is enabled, keep the link file as a static list and
+    # let yt-dlp's archive handle skipping already-processed entries.
+    if (-not $Settings.useArchive) {
+        $linesOut = New-Object System.Collections.Generic.List[string]
+        for ($i = 0; $i -lt $allLines.Count; $i++) {
+            $entryAtIndex = $linkEntries | Where-Object { $_.Index -eq $i } | Select-Object -First 1
+            if ($entryAtIndex) {
+                if (-not $entryAtIndex.WasSuccess) {
+                    $linesOut.Add($allLines[$i])
+                }
+            } else {
                 $linesOut.Add($allLines[$i])
             }
-        } else {
-            $linesOut.Add($allLines[$i])
         }
-    }
 
-    $linesOut | Set-Content $FilePath
+        $linesOut | Set-Content $FilePath
+    }
 
     # Clean up any empty uploader folders under this output directory
     Remove-EmptyDirectories -RootPath $OutputDir
