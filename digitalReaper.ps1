@@ -447,7 +447,9 @@ function Get-UrlsSmartMode {
     if ($inputMethod -eq "1") {
         $url = ""
         while ([string]::IsNullOrWhiteSpace($url)) {
-            Write-Host -NoNewline ">> Enter Target URL (Video or Playlist): " -ForegroundColor "Yellow"
+            Write-Host ""
+            Write-Host " Enter Target URL (Video or Playlist):" -ForegroundColor "Yellow"
+            Write-Host " > " -NoNewline -ForegroundColor "White"
             $url = Read-Host
             if ([string]::IsNullOrWhiteSpace($url)) { 
                 Write-Pulse -Text "`n[!] Abort: Target URL cannot be empty." -Colors @("Red", "Yellow") -Cycles 2
@@ -457,7 +459,9 @@ function Get-UrlsSmartMode {
     } else {
         $filePath = ""
         while ([string]::IsNullOrWhiteSpace($filePath) -or -not (Test-Path $filePath)) {
-            Write-Host -NoNewline ">> Enter path to URLs file (.txt): " -ForegroundColor "Magenta"
+            Write-Host ""
+            Write-Host " Enter path to URLs file (.txt):" -ForegroundColor "Magenta"
+            Write-Host " > " -NoNewline -ForegroundColor "White"
             $filePath = Read-Host
             if ([string]::IsNullOrWhiteSpace($filePath)) { 
                 Write-Pulse -Text "`n[!] File path cannot be empty." -Colors @("Red", "Yellow") -Cycles 1
@@ -541,10 +545,11 @@ function Process-LinkFile {
         try {
             Show-ProgressUpdate "REAPER processing: $($entry.OriginalUrl)" -Type "Target"
             
-            $currentArgs = $ytDlpArgs.ToArray()
+            $currentArgs = @()
+            $currentArgs += $ytDlpArgs
             $currentArgs += $urlToUse
 
-            & $script:YtDlpPath $currentArgs
+            & $script:YtDlpPath @currentArgs
 
             if ($LASTEXITCODE -eq 0) {
                 $successCount++
@@ -680,10 +685,11 @@ function Run-InteractiveMode {
         try {
             Show-ProgressUpdate "REAPER processing: $url" -Type "Target"
             
-            $currentArgs = $ytDlpArgs.ToArray()
+            $currentArgs = @()
+            $currentArgs += $ytDlpArgs
             $currentArgs += $url
             
-            & $script:YtDlpPath $currentArgs
+            & $script:YtDlpPath @currentArgs
             
             if ($LASTEXITCODE -eq 0) {
                 $successCount++
