@@ -390,10 +390,9 @@ function Get-YtDlpArgs {
 
     $ytDlpArgs.Add("--continue")               # resume partial downloads if possible
     $ytDlpArgs.Add("--no-part")                # no .part files left behind
-    $ytDlpArgs.Add("--newline")                # cleaner progress output
+    $ytDlpArgs.Add("--newline")                # force progress output as separate lines
 
     $ytDlpArgs.Add("--no-warnings")
-    $ytDlpArgs.Add("--console-title")
 
     # Per-type download archive so the tool remembers what you've already taken
     $archiveFileName = if ($DownloadType -eq "audio") { "yt-dlp-archive-audio.txt" } else { "yt-dlp-archive-video.txt" }
