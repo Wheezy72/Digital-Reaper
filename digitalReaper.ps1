@@ -393,6 +393,7 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--newline")                # force progress output as separate lines
 
     $ytDlpArgs.Add("--no-warnings")
+    $ytDlpArgs.Add("--console-title")          # mirror progress into the console title bar as well
 
     # Per-type download archive so the tool remembers what you've already taken
     $archiveFileName = if ($DownloadType -eq "audio") { "yt-dlp-archive-audio.txt" } else { "yt-dlp-archive-video.txt" }
