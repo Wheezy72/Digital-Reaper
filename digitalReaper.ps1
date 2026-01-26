@@ -110,8 +110,9 @@ function Get-UrlsFromFile {
     param ([string]$FilePath)
     $urls = @()
     if (Test-Path $FilePath) {
-        $content = Get-Content $FilePath
+        $content = @(Get-Content $FilePath)
         foreach ($line in $content) {
+            $line = [string]$line
             $line = $line.Trim()
             if ($line -and !$line.StartsWith("#") -and ($line.StartsWith("http") -or $line.StartsWith("www"))) {
                 $urls += $line
@@ -163,6 +164,25 @@ function Ensure-Directory {
     if (-not (Test-Path $Path)) {
         New-Item -Path $Path -ItemType Directory -Force | Out-Null
     }
+}
+
+function Remove-EmptyDirectories {
+    param([string]$RootPath)
+
+    if (-not (Test-Path $RootPath)) {
+        return
+    }
+
+    # Walk from the deepest directories upward and remove any that contain no files.
+    Get-ChildItem -Path $RootPath -Directory -Recurse |
+        Sort-Object FullName -Descending |
+        ForEach-Object {
+            $hasFiles = Get-ChildItem -Path $_.FullName -Force |
+                Where-Object { -not $_.PSIsContainer }
+            if (-not $hasFiles) {
+                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
 }
 
 # ===================================================================
@@ -321,6 +341,15 @@ function Get-SanitizedUrls {
     return $sanitizedUrls
 }
 
+function Get-RandomUserAgent {
+    $userAgents = @(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+    )
+    return ($userAgents | Get-Random)
+}
+
 # ===================================================================
 # --- YT-DLP ARGUMENT BUILDER & BATCH HELPERS ---
 # ===================================================================
@@ -334,19 +363,51 @@ function Get-YtDlpArgs {
 
     $ytDlpArgs = New-Object System.Collections.Generic.List[string]
 
-    # Core robustness / tuning
+    # Core robustness / tuning and network behavior
     $ytDlpArgs.Add("--ffmpeg-location")
     $ytDlpArgs.Add($script:BinDir)
-    $ytDlpArgs.Add("--fragment-retries")
-    $ytDlpArgs.Add("infinite")
-    $ytDlpArgs.Add("--retry-sleep")
-    $ytDlpArgs.Add("fragment:exp=1:300")
+
+    $ytDlpArgs.Add("--force-ipv4")              # avoid flaky IPv6 paths
+    $ytDlpArgs.Add("--socket-timeout")
+    $ytDlpArgs.Add("30")                        # 30s socket timeout
+
     $ytDlpArgs.Add("--sleep-interval")
-    $ytDlpArgs.Add("3")
+    $ytDlpArgs.Add("1")                         # 1s base sleep between requests
     $ytDlpArgs.Add("--max-sleep-interval")
-    $ytDlpArgs.Add("7")
+    $ytDlpArgs.Add("3")                         # up to 3s between requests
+
+    $ytDlpArgs.Add("--retry-sleep")
+    $ytDlpArgs.Add("exp=1:5")                   # exponential backoff: 1,2,4,5s
+
+    $ytDlpArgs.Add("--extractor-retries")
+    $ytDlpArgs.Add("5")                         # retry extraction a few times
+
+    $ytDlpArgs.Add("--fragment-retries")
+    $ytDlpArgs.Add("15")                        # retry fragment downloads
+
+    $ytDlpArgs.Add("--concurrent-fragments")
+    $ytDlpArgs.Add("3")                         # modest parallelism per download
+
+    $ytDlpArgs.Add("--continue")               # resume partial downloads if possible
+    $ytDlpArgs.Add("--no-part")                # no .part files left behind
+    $ytDlpArgs.Add("--newline")                # cleaner progress output
+
     $ytDlpArgs.Add("--no-warnings")
     $ytDlpArgs.Add("--console-title")
+
+    # Per-type download archive so the tool remembers what you've already taken
+    $archiveFileName = if ($DownloadType -eq "audio") { "yt-dlp-archive-audio.txt" } else { "yt-dlp-archive-video.txt" }
+    $archivePath = Join-Path $script:EngineDir $archiveFileName
+    $ytDlpArgs.Add("--download-archive")
+    $ytDlpArgs.Add($archivePath)
+
+    # Basic header hardening: rotate desktop user agents and send common headers
+    $ytDlpArgs.Add("--user-agent")
+    $ytDlpArgs.Add((Get-RandomUserAgent))
+    $ytDlpArgs.Add("--add-header")
+    $ytDlpArgs.Add("Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+    $ytDlpArgs.Add("--add-header")
+    $ytDlpArgs.Add("Accept-Language:en-US,en;q=0.9")
 
     Show-ProgressUpdate "[+] REAPER output optimization enabled" -Type "Success"
 
@@ -598,6 +659,9 @@ function Process-LinkFile {
 
     $linesOut | Set-Content $FilePath
 
+    # Clean up any empty uploader folders under this output directory
+    Remove-EmptyDirectories -RootPath $OutputDir
+
     return [pscustomobject]@{
         Success = $successCount
         Failure = $failureCount
@@ -736,6 +800,9 @@ function Run-InteractiveMode {
     Write-Pulse -Text "$failureCount" -Colors @("Red", "Yellow") -Cycles 1 -Speed 300
     Write-Host "Downloads saved to:        " -NoNewline -ForegroundColor "White"
     Write-Host "$script:DownloadsDir" -ForegroundColor "Yellow"
+
+    # Clean up any empty uploader folders under the per-type output directory
+    Remove-EmptyDirectories -RootPath $outputBaseDir
 
     if ($successCount -gt 0) {
         Show-CompletionBanner
