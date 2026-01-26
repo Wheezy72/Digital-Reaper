@@ -87,11 +87,7 @@ function Show-StartupSequence {
 }
 
 function Show-CompletionBanner {
-    Write-Host ""
-    Write-Host "==================================================" -ForegroundColor Green
-    Write-Host "               MISSION STATUS: COMPLETE           " -ForegroundColor Green
-    Write-Host "==================================================" -ForegroundColor Green
-    Write-Host ""
+    Write-Pulse -Text "[✓] DIGITAL REAPER: mission complete." -Colors @("Green", "White", "Green") -Cycles 2 -Speed 200
 
     $prodByWheezy = @'
     ____                 __   __             _       ____                         
@@ -512,11 +508,12 @@ function Process-LinkFile {
     Show-ProgressUpdate "[+] Processing link file: $FilePath" -Type "System"
     Ensure-Directory -Path $OutputDir
 
-    $allLines = Get-Content $FilePath
+    # Ensure we always have an array of lines, even for single-line files
+    $allLines = @(Get-Content $FilePath)
     $linkEntries = @()
 
     for ($i = 0; $i -lt $allLines.Count; $i++) {
-        $line = $allLines[$i]
+        $line = [string]$allLines[$i]
         $trim = $line.Trim()
         if ($trim -and -not $trim.StartsWith("#") -and ($trim.StartsWith("http") -or $trim.StartsWith("www"))) {
             $originalUrl = $trim
@@ -661,7 +658,7 @@ function Run-BatchMode {
     if ($batchSuccess -gt 0) {
         Show-CompletionBanner
     } else {
-        Write-Pulse -Text "`n[!] DIGITAL REAPER MISSION COMPROMISED: All batch targets failed." -Colors @("Red", "DarkRed") -Cycles 3
+        Write-Pulse -Text "`n[!] DIGITAL REAPER MISSION COMPROMISED: All batch targets failed." -Colors @("Red", "DarkRed") -Cycles 1
     }
 }
 
@@ -743,7 +740,7 @@ function Run-InteractiveMode {
     if ($successCount -gt 0) {
         Show-CompletionBanner
     } else {
-        Write-Pulse -Text "`n[!] DIGITAL REAPER MISSION COMPROMISED: All targets failed." -Colors @("Red", "DarkRed") -Cycles 3
+        Write-Pulse -Text "`n[!] DIGITAL REAPER MISSION COMPROMISED: All targets failed." -Colors @("Red", "DarkRed") -Cycles 1
     }
 }
 
