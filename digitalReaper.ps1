@@ -364,7 +364,8 @@ function Get-YtDlpArgs {
         }
 
         Write-TypeWriter -Text "[*] REAPER configuring for $($Settings.videoQuality) video stream..." -Color "Green" -Speed 30
-        $format = "($codecPreference" + "bestvideo[height<=$height])+bestaudio/best[height<=$height]"
+
+        $format = "(${codecPreference}bestvideo[height<=$height])+bestaudio/best[height<=$height]"
 
         $ytDlpArgs.Add("-f")
         $ytDlpArgs.Add($format)
