@@ -437,7 +437,7 @@ function Get-UrlsSmartMode {
     Write-TypeWriter -Text "`n--- Target Acquisition Protocol ---" -Color "Cyan" -Speed 30
     $inputMethod = ""
     while ($inputMethod -notin @("1", "2")) {
-        Show-MenuOption -Prompt "Select Input Method" -Options "1=Manual URL, 2=Load from File" -Colors @("Yellow", "Magenta")
+        Show-MenuOption -Prompt "Select Input Method" -Options "1=Manual URL, 2=Load from File"
         $inputMethod = Read-Host
         if ($inputMethod -notin @("1", "2")) { 
             Write-Pulse -Text "`n[!] Invalid command. Use 1 or 2." -Colors @("Red", "Yellow") -Cycles 2
@@ -590,6 +590,7 @@ function Should-RunBatchMode {
         return $false
     }
 
+    # Only run batch mode if at least one link file exists.
     return (Test-Path $script:AudioLinksFile) -or (Test-Path $script:VideoLinksFile)
 }
 
@@ -600,17 +601,27 @@ function Run-BatchMode {
 
     $batchSuccess = 0
     $batchFailure = 0
+    $batchTargets  = 0
 
     if (Test-Path $script:AudioLinksFile) {
-        $audioResult = Process-LinkFile -FilePath $script:AudioLinksFile -Settings $Settings -DownloadType "audio" -OutputDir $script:AudioOutputDir
+        $audioResult   = Process-LinkFile -FilePath $script:AudioLinksFile -Settings $Settings -DownloadType "audio" -OutputDir $script:AudioOutputDir
         $batchSuccess += $audioResult.Success
         $batchFailure += $audioResult.Failure
+        $batchTargets += ($audioResult.Success + $audioResult.Failure)
     }
 
     if (Test-Path $script:VideoLinksFile) {
-        $videoResult = Process-LinkFile -FilePath $script:VideoLinksFile -Settings $Settings -DownloadType "video" -OutputDir $script:VideoOutputDir
+        $videoResult   = Process-LinkFile -FilePath $script:VideoLinksFile -Settings $Settings -DownloadType "video" -OutputDir $script:VideoOutputDir
         $batchSuccess += $videoResult.Success
         $batchFailure += $videoResult.Failure
+        $batchTargets += ($videoResult.Success + $videoResult.Failure)
+    }
+
+    if ($batchTargets -eq 0) {
+        Write-TypeWriter -Text "`n[!] No valid URLs found in audioLinks.txt or videoLinks.txt." -Color "Yellow" -Speed 20
+        Write-TypeWriter -Text "[*] Switching to interactive mode..." -Color "Cyan" -Speed 20
+        Run-InteractiveMode -Settings $Settings
+        return
     }
 
     Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Mission Summary ]---" -Color "Cyan" -Speed 30
