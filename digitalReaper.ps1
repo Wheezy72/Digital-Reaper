@@ -350,7 +350,6 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--max-sleep-interval")
     $ytDlpArgs.Add("7")
     $ytDlpArgs.Add("--no-warnings")
-    $ytDlpArgs.Add("--no-call-home")
     $ytDlpArgs.Add("--console-title")
 
     Show-ProgressUpdate "[+] REAPER output optimization enabled" -Type "Success"
