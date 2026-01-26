@@ -646,13 +646,18 @@ function Run-InteractiveMode {
     Show-ProgressUpdate "Loaded $($urls.Count) targets for processing" -Type "Success"
 
     $downloadType = $Settings.downloadType
-    $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $downloadType -OutputDir $script:DownloadsDir
+
+    # Route interactive jobs to the same per-type folders used by batch mode
+    $outputBaseDir = if ($downloadType -eq "audio") { $script:AudioOutputDir } else { $script:VideoOutputDir }
+    Ensure-Directory -Path $outputBaseDir
+
+    $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $downloadType -OutputDir $outputBaseDir
 
     Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Beginning Mass Exfiltration ]---" -Color "Red" -Speed 40
     Write-Host "Target Count: " -NoNewline -ForegroundColor "White"
     Write-Host "$($urls.Count)" -ForegroundColor "Cyan"
     Write-Host "Output Folder:" -NoNewline -ForegroundColor "White" 
-    Write-Host " $script:DownloadsDir" -ForegroundColor "Yellow"
+    Write-Host " $outputBaseDir" -ForegroundColor "Yellow"
     Write-Host "Quality:      " -NoNewline -ForegroundColor "White"
     Write-Host "$($Settings.videoQuality)" -ForegroundColor "Magenta"
     Write-TypeWriter -Text "-----------------------------------------------" -Color "Red" -Speed 20
