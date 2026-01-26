@@ -199,6 +199,7 @@ function Get-DefaultSettings {
         subtitleLanguages = @("en", "en-US")
         outputTemplate    = "%(uploader)s/[%(upload_date)s] %(title)s [%(id)s].%(ext)s"
         autoUpdate        = $true
+        useArchive        = $false
     }
 }
 
@@ -395,11 +396,13 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--no-warnings")
     $ytDlpArgs.Add("--console-title")          # mirror progress into the console title bar as well
 
-    # Per-type download archive so the tool remembers what you've already taken
-    $archiveFileName = if ($DownloadType -eq "audio") { "yt-dlp-archive-audio.txt" } else { "yt-dlp-archive-video.txt" }
-    $archivePath = Join-Path $script:EngineDir $archiveFileName
-    $ytDlpArgs.Add("--download-archive")
-    $ytDlpArgs.Add($archivePath)
+    # Optional per-type download archive so the tool remembers what you've already taken
+    if ($Settings.useArchive) {
+        $archiveFileName = if ($DownloadType -eq "audio") { "yt-dlp-archive-audio.txt" } else { "yt-dlp-archive-video.txt" }
+        $archivePath = Join-Path $script:EngineDir $archiveFileName
+        $ytDlpArgs.Add("--download-archive")
+        $ytDlpArgs.Add($archivePath)
+    }
 
     # Basic header hardening: rotate desktop user agents and send common headers
     $ytDlpArgs.Add("--user-agent")
