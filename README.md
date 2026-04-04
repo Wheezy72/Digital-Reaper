@@ -96,17 +96,27 @@ If you run `digitalReaper.bat` with **no** `audioLinks.txt`/`videoLinks.txt` and
 
 ### 5. Automated / Scheduled mode
 
-Run downloads hands-free on a repeating schedule using Windows Task Scheduler:
+Run downloads hands-free on a repeating schedule using a single script — **`scheduler.bat`**:
 
 1. Add your URLs to `audioLinks.txt` / `videoLinks.txt` as normal
-2. **Double-click** `scheduleTask.bat` and choose an interval:
+2. **Double-click** `scheduler.bat` — a menu appears:
+
+   ```
+   1 = Schedule  (register / update automated task)
+   2 = Remove    (unregister scheduled task)
+   3 = Run Now   (one silent background run)
+   4 = Status    (check if task is registered)
+   5 = Exit
+   ```
+
+3. Choose **1** and pick an interval:
    - Every hour / 4 hours / 12 hours
    - Daily at midnight
    - Weekly on Sunday at midnight
-3. Digital Reaper registers a Windows Scheduled Task named **DigitalReaper**  
-   that silently runs `runBackground.bat` on your chosen schedule
 
-> **To remove the task:** double-click `removeTask.bat`  
+Digital Reaper registers a Windows Scheduled Task named **DigitalReaper** that silently calls `scheduler.bat /silent` on your chosen schedule.
+
+> **To remove the task:** open `scheduler.bat` → option **2**  
 > **To view/edit it:** open Windows Task Scheduler (`taskschd.msc`)
 
 When running silently in the background, Digital Reaper processes any URLs in `audioLinks.txt` / `videoLinks.txt` and removes them as they succeed — so the lists stay clean between runs.
@@ -139,9 +149,7 @@ For a description of each setting, see `downloads/settings.txt`.
 ├── 📄 videoLinks.txt          (📼 Batch video URLs – optional)
 ├── 📄 initDigitalReaper.ps1   (🚀 One-time engine bootstrap – self-deletes)
 ├── 📄 cleanup.bat             (🧹 Hides internal files for a clean view)
-├── 📄 scheduleTask.bat        (⏰ Register a Windows Scheduled Task)
-├── 📄 removeTask.bat          (🗑️ Remove the scheduled task)
-├── 📄 runBackground.bat       (🤫 Silent runner – called by the scheduled task)
+├── 📄 scheduler.bat           (⏰ Schedule / remove / run / status — all in one)
 ├── 📄 README.md               (📖 This file)
 ├── 📁 engine/                 (⚙️ Internal binaries)
 │   ├── yt-dlp.exe             (Downloader binary)
