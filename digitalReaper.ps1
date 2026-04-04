@@ -230,6 +230,55 @@ function Set-HiddenAttribute {
     }
 }
 
+function Install-YtDlp {
+    Show-ProgressUpdate "[~] yt-dlp not found — downloading latest release..." -Type "Update"
+    try {
+        $apiUrl  = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
+        $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'DigitalReaper' } -TimeoutSec 15 -ErrorAction Stop
+        $asset   = $release.assets | Where-Object { $_.name -eq "yt-dlp.exe" } | Select-Object -First 1
+        if (-not $asset) { throw "yt-dlp.exe asset not found in latest release." }
+
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $script:YtDlpPath -TimeoutSec 120 -ErrorAction Stop
+
+        $downloaded = Get-Item $script:YtDlpPath -ErrorAction SilentlyContinue
+        if (-not $downloaded -or $downloaded.Length -eq 0) { throw "Downloaded file is empty." }
+
+        Show-ProgressUpdate "[+] yt-dlp installed ($($release.tag_name))" -Type "Success"
+        return $true
+    } catch {
+        Show-ProgressUpdate "[!] Failed to download yt-dlp: $($_.Exception.Message)" -Type "Error"
+        return $false
+    }
+}
+
+function Install-Ffmpeg {
+    Show-ProgressUpdate "[~] ffmpeg not found — downloading essentials build..." -Type "Update"
+    $zipUrl  = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
+    $zipPath = Join-Path $env:TEMP "ffmpeg-reaper.zip"
+    $extractPath = Join-Path $env:TEMP "ffmpeg-reaper"
+    try {
+        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -TimeoutSec 180 -ErrorAction Stop
+
+        if (Test-Path $extractPath) { Remove-Item $extractPath -Recurse -Force }
+        Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force -ErrorAction Stop
+
+        # The zip contains a single top-level folder; ffmpeg.exe is in its bin/ subfolder
+        $ffmpegExe = Get-ChildItem -Path $extractPath -Filter "ffmpeg.exe" -Recurse -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+        if (-not $ffmpegExe) { throw "ffmpeg.exe not found inside archive." }
+
+        Copy-Item $ffmpegExe.FullName $script:FfmpegPath -Force -ErrorAction Stop
+        Show-ProgressUpdate "[+] ffmpeg installed" -Type "Success"
+        return $true
+    } catch {
+        Show-ProgressUpdate "[!] Failed to download ffmpeg: $($_.Exception.Message)" -Type "Error"
+        return $false
+    } finally {
+        Remove-Item $zipPath    -Force -ErrorAction SilentlyContinue
+        Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Initialize-DigitalReaper {
     Show-ProgressUpdate "[🔧] DIGITAL REAPER initializing..." -Type "System"
     
@@ -276,15 +325,11 @@ function Initialize-DigitalReaper {
     }
     
     if (-not (Test-Path $script:YtDlpPath)) {
-        Show-ProgressUpdate "[!] yt-dlp.exe not found in engine/!" -Type "Error"
-        Show-ProgressUpdate "[>] Run initDigitalReaper.ps1 first or download yt-dlp.exe manually into the engine folder." -Type "Warning"
-        return $false
+        if (-not (Install-YtDlp)) { return $false }
     }
     
     if (-not (Test-Path $script:FfmpegPath)) {
-        Show-ProgressUpdate "[!] ffmpeg.exe not found in engine/!" -Type "Error"
-        Show-ProgressUpdate "[>] Run initDigitalReaper.ps1 first or place ffmpeg.exe manually into the engine folder." -Type "Warning"
-        return $false
+        if (-not (Install-Ffmpeg)) { return $false }
     }
     
     Set-HiddenAttribute -Path $script:YtDlpPath
