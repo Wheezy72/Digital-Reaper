@@ -512,7 +512,7 @@ function Get-UrlsSmartMode {
     if ($inputMethod -eq "1") {
         $url = ""
         while ([string]::IsNullOrWhiteSpace($url)) {
-            Write-Host -NoNewline ">> Enter Target URL (Video or Playlist): " -ForegroundColor "Yellow"
+            Write-Host ">> Enter Target URL (Video or Playlist): " -ForegroundColor "Yellow"
             $url = Read-Host
             if ([string]::IsNullOrWhiteSpace($url)) { 
                 Write-Pulse -Text "`n[!] Abort: Target URL cannot be empty." -Colors @("Red", "Yellow") -Cycles 2
@@ -522,7 +522,7 @@ function Get-UrlsSmartMode {
     } else {
         $filePath = ""
         while ([string]::IsNullOrWhiteSpace($filePath) -or -not (Test-Path $filePath)) {
-            Write-Host -NoNewline ">> Enter path to URLs file (.txt): " -ForegroundColor "Magenta"
+            Write-Host ">> Enter path to URLs file (.txt): " -ForegroundColor "Magenta"
             $filePath = Read-Host
             if ([string]::IsNullOrWhiteSpace($filePath)) { 
                 Write-Pulse -Text "`n[!] File path cannot be empty." -Colors @("Red", "Yellow") -Cycles 1
@@ -600,8 +600,7 @@ function Process-LinkFile {
         try {
             Show-ProgressUpdate "REAPER processing: $($entry.OriginalUrl)" -Type "Target"
             
-            $currentArgs = $ytDlpArgs.ToArray()
-            $currentArgs += $urlToUse
+            $currentArgs = @($ytDlpArgs) + $urlToUse
 
             & $script:YtDlpPath $currentArgs
 
@@ -753,8 +752,7 @@ function Run-InteractiveMode {
         try {
             Show-ProgressUpdate "REAPER processing: $url" -Type "Target"
             
-            $currentArgs = $ytDlpArgs.ToArray()
-            $currentArgs += $url
+            $currentArgs = @($ytDlpArgs) + $url
             
             & $script:YtDlpPath $currentArgs
             
