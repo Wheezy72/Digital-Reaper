@@ -21,7 +21,6 @@ $script:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:EngineDir   = Join-Path $script:ScriptDir "engine"
 $script:YtDlpPath   = Join-Path $script:EngineDir "yt-dlp.exe"
 $script:FfmpegPath  = Join-Path $script:EngineDir "ffmpeg.exe"
-$script:BinDir      = $script:EngineDir
 
 $script:DownloadsDir      = Join-Path $script:ScriptDir "downloads"
 $script:DefaultLinksFile  = Join-Path $script:ScriptDir "links.txt"
@@ -299,14 +298,32 @@ function Update-YtDlpSilent {
             if (Test-Path $script:YtDlpPath) {
                 Copy-Item $script:YtDlpPath $backupPath -Force
             }
-            
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $script:YtDlpPath -TimeoutSec 30 -ErrorAction SilentlyContinue
+
+            try {
+                Invoke-WebRequest -Uri $downloadUrl -OutFile $script:YtDlpPath -TimeoutSec 30 -ErrorAction Stop
+            } catch {
+                # Download failed — restore the backup so the tool keeps working
+                if (Test-Path $backupPath) {
+                    Copy-Item $backupPath $script:YtDlpPath -Force
+                }
+                return
+            }
+
+            # Verify the downloaded file is non-empty before committing
+            $downloaded = Get-Item $script:YtDlpPath -ErrorAction SilentlyContinue
+            if (-not $downloaded -or $downloaded.Length -eq 0) {
+                if (Test-Path $backupPath) {
+                    Copy-Item $backupPath $script:YtDlpPath -Force
+                }
+                return
+            }
+
             Set-HiddenAttribute -Path $script:YtDlpPath
-            
+
             if (Test-Path $backupPath) {
                 Remove-Item $backupPath -Force -ErrorAction SilentlyContinue
             }
-            
+
             Show-ProgressUpdate "yt-dlp updated to $latestVersion" -Type "Success"
         }
     } catch {
@@ -367,7 +384,7 @@ function Get-YtDlpArgs {
 
     Show-ProgressUpdate "[+] Anti-bot stealth layer active" -Type "System"
     $ytDlpArgs.Add("--ffmpeg-location")
-    $ytDlpArgs.Add($script:BinDir)
+    $ytDlpArgs.Add($script:EngineDir)
     $ytDlpArgs.Add("--fragment-retries")
     $ytDlpArgs.Add("infinite")
     $ytDlpArgs.Add("--retry-sleep")
@@ -546,7 +563,6 @@ function Process-LinkFile {
             $entry = [pscustomobject]@{
                 Index        = $i
                 OriginalUrl  = $originalUrl
-                SanitizedUrl = $originalUrl
                 WasSuccess   = $false
             }
             $linkEntries += $entry
@@ -570,15 +586,17 @@ function Process-LinkFile {
     Write-Host "$($linkEntries.Count)" -ForegroundColor "Cyan"
     Write-Host "Output Folder:" -NoNewline -ForegroundColor "White"
     Write-Host " $OutputDir" -ForegroundColor "Yellow"
-    Write-Host "Quality:      " -NoNewline -ForegroundColor "White"
-    Write-Host "$($Settings.videoQuality)" -ForegroundColor "Magenta"
+    if ($DownloadType -eq "video") {
+        Write-Host "Quality:      " -NoNewline -ForegroundColor "White"
+        Write-Host "$($Settings.videoQuality)" -ForegroundColor "Magenta"
+    }
     Write-TypeWriter -Text "-----------------------------------------------" -Color "Red" -Speed 20
 
     $successCount = 0
     $failureCount = 0
 
     foreach ($entry in $linkEntries) {
-        $urlToUse = $entry.SanitizedUrl
+        $urlToUse = $entry.OriginalUrl
         try {
             Show-ProgressUpdate "REAPER processing: $($entry.OriginalUrl)" -Type "Target"
             
@@ -693,8 +711,6 @@ function Run-InteractiveMode {
         Read-Host "Press Enter to exit..."
         exit 1
     }
-    
-    $urls = Get-SanitizedUrls -Urls $urls
     
     Show-ProgressUpdate "Loaded $($urls.Count) target(s) for processing" -Type "Success"
 
