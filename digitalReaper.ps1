@@ -1,4 +1,4 @@
-<#
+﻿<#
 ========================================================================
     DIGITAL REAPER - YouTube Downloader
     Custom tool for grabbing content with style

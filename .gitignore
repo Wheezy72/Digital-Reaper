@@ -1,0 +1,12 @@
+# Generated link list files
+audioLinks.txt
+videoLinks.txt
+
+# yt-dlp / ffmpeg engine binaries
+engine/
+
+# Downloaded media output
+downloads/
+
+# VS Code / editor settings
+.vscode/
