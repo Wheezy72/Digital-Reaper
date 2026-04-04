@@ -580,12 +580,12 @@ function Process-LinkFile {
     $typeLabel = $DownloadType.ToUpper()
     Write-Host ""
     Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
-    Write-Host "  |  DIGITAL REAPER  >>  $typeLabel BATCH              |" -ForegroundColor Red
+    Write-Host "  |  DIGITAL REAPER  >>  $typeLabel BATCH" -ForegroundColor Red
     Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
     Write-Host "  | Targets : " -NoNewline -ForegroundColor Gray
-    Write-Host "$($linkEntries.Count)" -NoNewline -ForegroundColor Cyan
-    Write-Host "  |  Output : " -NoNewline -ForegroundColor Gray
-    Write-Host (Split-Path $OutputDir -Leaf) -ForegroundColor Yellow
+    Write-Host "$($linkEntries.Count)" -ForegroundColor Cyan
+    Write-Host "  | Output  : " -NoNewline -ForegroundColor Gray
+    Write-Host $OutputDir -ForegroundColor Yellow
     if ($DownloadType -eq "video") {
         Write-Host "  | Quality : " -NoNewline -ForegroundColor Gray
         Write-Host "$($Settings.videoQuality)" -ForegroundColor Magenta
@@ -745,12 +745,12 @@ function Run-InteractiveMode {
     $typeLabel = $resolvedType.ToUpper()
     Write-Host ""
     Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
-    Write-Host "  |  DIGITAL REAPER  >>  $typeLabel EXFILTRATION         |" -ForegroundColor Red
+    Write-Host "  |  DIGITAL REAPER  >>  $typeLabel EXFILTRATION" -ForegroundColor Red
     Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
     Write-Host "  | Targets : " -NoNewline -ForegroundColor Gray
-    Write-Host "$($urls.Count)" -NoNewline -ForegroundColor Cyan
-    Write-Host "  |  Output : " -NoNewline -ForegroundColor Gray
-    Write-Host (Split-Path $outputDir -Leaf) -ForegroundColor Yellow
+    Write-Host "$($urls.Count)" -ForegroundColor Cyan
+    Write-Host "  | Output  : " -NoNewline -ForegroundColor Gray
+    Write-Host $outputDir -ForegroundColor Yellow
     if ($resolvedType -eq "video") {
         Write-Host "  | Quality : " -NoNewline -ForegroundColor Gray
         Write-Host "$($Settings.videoQuality)" -ForegroundColor Magenta
