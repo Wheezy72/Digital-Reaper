@@ -20,16 +20,3 @@ if "%~1" neq "" (
     echo [+] Starting DIGITAL REAPER in interactive mode...
     powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0digitalReaper.ps1"
 )
-
-echo.
-echo ===============================================
-if errorlevel 1 (
-    echo [!] Script encountered an error!
-    echo Check the messages above for details.
-) else (
-    echo [+] DIGITAL REAPER session completed.
-)
-echo ===============================================
-echo.
-echo Press any key to exit...
-pause >nul
