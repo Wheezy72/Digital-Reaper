@@ -1,10 +1,6 @@
 OPTIONS GUIDE:
 ==============
 
-downloadType:
-- "video" = Download video files (mp4)
-- "audio" = Download audio only (mp3/m4a)
-
 videoQuality (for video downloads):
 - "720p"  = HD quality
 - "1080p" = Full HD quality

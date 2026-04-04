@@ -1,11 +1,9 @@
 {
-  "downloadType": "video",
   "videoQuality": "1080p",
   "audioFormat": "mp3",
   "useHEVC": true,
   "downloadSubtitles": true,
   "subtitleLanguages": ["en", "en-US"],
   "outputTemplate": "%(uploader)s/[%(upload_date)s] %(title)s [%(id)s].%(ext)s",
-  "autoUpdate": true,
-  "silentMode": false
+  "autoUpdate": true
 }
