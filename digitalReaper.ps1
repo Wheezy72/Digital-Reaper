@@ -88,14 +88,7 @@ function Show-StartupSequence {
     Write-Host ""
 }
 
-function Show-CompletionBanner {
-    Write-Host ""
-    Write-Host "==================================================" -ForegroundColor Green
-    Write-Host "               MISSION STATUS: COMPLETE           " -ForegroundColor Green
-    Write-Host "==================================================" -ForegroundColor Green
-    Write-Host ""
-
-    $prodByWheezy = @'
+function Show-CompletionBanner {    $prodByWheezy = @'
     ____                 __   __             _       ____                         
    / __ \_______  ____/ /  / /_  __  __   | |     / / /_  ___  ___  ____  __  __
   / /_/ / ___/ __ \/ __  /  / __ \/ / / /   | | /| / / __ \/ _ \/ _ \/_  / / / / /
@@ -482,7 +475,6 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--no-warnings")
     $ytDlpArgs.Add("--console-title")
     $ytDlpArgs.Add("--progress")
-    $ytDlpArgs.Add("--newline")
 
     if ($DownloadType -eq "video" -and $Settings.downloadSubtitles) {
         $ytDlpArgs.Add("--write-auto-sub")
