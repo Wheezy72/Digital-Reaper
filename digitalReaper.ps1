@@ -557,7 +557,7 @@ function Process-LinkFile {
     Show-ProgressUpdate "[+] Processing link file: $FilePath" -Type "System"
     Ensure-Directory -Path $OutputDir
 
-    $allLines = Get-Content $FilePath
+    $allLines = @(Get-Content $FilePath)
     $linkEntries = @()
 
     for ($i = 0; $i -lt $allLines.Count; $i++) {
