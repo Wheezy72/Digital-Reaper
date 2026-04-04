@@ -214,7 +214,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 - Delete `settings.json` to reset to defaults
 
 ### **Scheduled Task Fails:**
-- Run `scheduleTask.bat` **as Administrator** if task creation is blocked
+- Run `scheduler.bat` **as Administrator** if task creation is blocked
 - Make sure `audioLinks.txt` / `videoLinks.txt` have URLs in them before the task fires
 - To confirm the task is registered: open Task Scheduler (`taskschd.msc`) and look for **DigitalReaper**
 
