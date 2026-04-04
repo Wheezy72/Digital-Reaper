@@ -60,7 +60,6 @@ Digital Reaper will:
 
    ```json
    {
-     "downloadType": "video",
      "videoQuality": "1080p",
      "useHEVC": true,
      "downloadSubtitles": true,

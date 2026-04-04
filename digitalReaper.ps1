@@ -15,7 +15,6 @@ param(
 # --- SCRIPT CONFIGURATION ---
 # ===================================================================
 
-$SCRIPT_VERSION = "1.0.0"
 $YTDLP_CURRENT_VERSION = "2024.12.06"
 
 $script:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -61,16 +60,15 @@ function Write-Pulse {
 function Show-ProgressUpdate {
     param([string]$Status, [string]$Type = "Info")
     $timestamp = Get-Date -Format "HH:mm:ss"
-    $color = switch ($Type) {
-        "Success" { "Green" }; "Warning" { "Yellow" }; "Error" { "Red" }
-        "Target" { "Cyan" }; "System" { "Blue" }; "Update" { "Magenta" }
-        default { "White" }
-    }
     if ($Type -eq "Success") {
         Write-Pulse -Text "[$timestamp] $Status" -Colors @("Green", "White", "Green") -Cycles 1 -Speed 200
     } elseif ($Type -eq "Error") {
         Write-Pulse -Text "[$timestamp] $Status" -Colors @("Red", "DarkRed", "Red") -Cycles 2 -Speed 300
     } else {
+        $color = switch ($Type) {
+            "Warning" { "Yellow" }; "Target" { "Cyan" }; "System" { "Blue" }; "Update" { "Magenta" }
+            default { "White" }
+        }
         Write-Host "[$timestamp] $Status" -ForegroundColor $color
     }
 }
@@ -161,7 +159,6 @@ function Test-ValidUrl {
 
 function Get-DefaultSettings {
     return @{
-        downloadType      = "video"
         videoQuality      = "1080p"
         audioFormat       = "mp3"
         useHEVC           = $true
