@@ -4,6 +4,6 @@
   "useHEVC": true,
   "downloadSubtitles": true,
   "subtitleLanguages": ["en", "en-US"],
-  "outputTemplate": "%(uploader)s/[%(upload_date)s] %(title)s [%(id)s].%(ext)s",
+  "outputTemplate": "[%(upload_date)s] %(title)s [%(id)s].%(ext)s",
   "autoUpdate": true
 }

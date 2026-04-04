@@ -116,9 +116,9 @@ function Get-UrlsFromFile {
         $content = Get-Content $FilePath
         foreach ($line in $content) {
             if (Test-ValidUrl -Line $line) {
-                $line = $line.Trim()
+                $line = $line.Trim().TrimStart([char]0xFEFF, [char]0x200B, [char]0x200C, [char]0x200D, [char]0xFFFE)
                 $urls += $line
-                Show-ProgressUpdate "Target acquired: $line" -Type "Target"
+                Show-ProgressUpdate "Found: $line" -Type "Target"
             }
         }
     }
@@ -148,7 +148,8 @@ function Ensure-Directory {
 
 function Test-ValidUrl {
     param([string]$Line)
-    $trimmed = $Line.Trim()
+    # Strip BOM (U+FEFF) and other invisible/zero-width characters before checking
+    $trimmed = $Line.Trim().TrimStart([char]0xFEFF, [char]0x200B, [char]0x200C, [char]0x200D, [char]0xFFFE)
     return $trimmed -and -not $trimmed.StartsWith("#") -and ($trimmed.StartsWith("http") -or $trimmed.StartsWith("www"))
 }
 
@@ -163,7 +164,7 @@ function Get-DefaultSettings {
         useHEVC           = $true
         downloadSubtitles = $true
         subtitleLanguages = @("en", "en-US")
-        outputTemplate    = "%(uploader)s/[%(upload_date)s] %(title)s [%(id)s].%(ext)s"
+        outputTemplate    = "[%(upload_date)s] %(title)s [%(id)s].%(ext)s"
         autoUpdate        = $true
     }
 }
@@ -382,7 +383,7 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--extractor-retries")
     $ytDlpArgs.Add("5")
 
-    Show-ProgressUpdate "[+] Anti-bot stealth layer active" -Type "System"
+    Show-ProgressUpdate "[+] Preparing download..." -Type "System"
     $ytDlpArgs.Add("--ffmpeg-location")
     $ytDlpArgs.Add($script:EngineDir)
     $ytDlpArgs.Add("--fragment-retries")
@@ -394,13 +395,12 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--max-sleep-interval")
     $ytDlpArgs.Add("7")
     $ytDlpArgs.Add("--no-warnings")
-    $ytDlpArgs.Add("--no-call-home")
     $ytDlpArgs.Add("--console-title")
 
-    Show-ProgressUpdate "[+] REAPER output optimization enabled" -Type "Success"
+    Show-ProgressUpdate "[+] Download engine ready" -Type "Success"
 
     if ($DownloadType -eq "video" -and $Settings.downloadSubtitles) {
-        Show-ProgressUpdate "Subtitle extraction enabled" -Type "Success"
+        Show-ProgressUpdate "Subtitles enabled" -Type "Success"
         $ytDlpArgs.Add("--write-auto-sub")
         $ytDlpArgs.Add("--write-sub")
         $ytDlpArgs.Add("--sub-lang")
@@ -410,7 +410,7 @@ function Get-YtDlpArgs {
     }
 
     if ($DownloadType -eq "audio") {
-        Write-TypeWriter -Text "[*] REAPER configuring for audio-only exfiltration..." -Color "Yellow" -Speed 30
+        Write-TypeWriter -Text "[*] Configuring audio-only download..." -Color "Yellow" -Speed 30
         $ytDlpArgs.Add("--extract-audio")
         $ytDlpArgs.Add("--audio-format")
         $ytDlpArgs.Add($Settings.audioFormat)
@@ -427,7 +427,7 @@ function Get-YtDlpArgs {
             default { 1080 }
         }
 
-        Write-TypeWriter -Text "[*] REAPER configuring for $($Settings.videoQuality) video stream..." -Color "Green" -Speed 30
+        Write-TypeWriter -Text "[*] Configuring video download at $($Settings.videoQuality)..." -Color "Green" -Speed 30
         $format = "($codecPreference" + "bestvideo[height<=$height])+bestaudio/best[height<=$height]"
 
         $ytDlpArgs.Add("-f")
@@ -436,17 +436,17 @@ function Get-YtDlpArgs {
         $ytDlpArgs.Add("mp4")
 
         if ($Settings.useHEVC) {
-            Show-ProgressUpdate "HEVC/H.265 codec preference enabled" -Type "Success"
+            Show-ProgressUpdate "HEVC/H.265 preferred" -Type "Success"
         }
     }
+
+    Show-ProgressUpdate "Saving to: $OutputDir" -Type "Success"
+    Write-Host "    Output folder: " -NoNewline -ForegroundColor "Gray"
+    Write-Host $OutputDir -ForegroundColor "Yellow"
 
     $outputTemplate = Join-Path -Path $OutputDir -ChildPath $Settings.outputTemplate
     $ytDlpArgs.Add("-o")
     $ytDlpArgs.Add($outputTemplate)
-
-    Show-ProgressUpdate "Enhanced metadata filename structure enabled" -Type "Success"
-    Write-Host "    Output: " -NoNewline -ForegroundColor "Gray"
-    Write-Host $OutputDir -ForegroundColor "Yellow"
 
     return $ytDlpArgs
 }
@@ -499,7 +499,7 @@ function Get-UrlsSmartMode {
         return Get-UrlsFromFile -FilePath $script:DefaultLinksFile
     }
     
-    Write-TypeWriter -Text "`n--- Target Acquisition Protocol ---" -Color "Cyan" -Speed 30
+    Write-TypeWriter -Text "`n--- Select Input Method ---" -Color "Cyan" -Speed 30
     $inputMethod = ""
     while ($inputMethod -notin @("1", "2")) {
         Show-MenuOption -Prompt "Select Input Method" -Options "1=Manual URL, 2=Load from File"
@@ -558,7 +558,7 @@ function Process-LinkFile {
     for ($i = 0; $i -lt $allLines.Count; $i++) {
         $line = $allLines[$i]
         if (Test-ValidUrl -Line $line) {
-            $originalUrl = $line.Trim()
+            $originalUrl = $line.Trim().TrimStart([char]0xFEFF, [char]0x200B, [char]0x200C, [char]0x200D, [char]0xFFFE)
 
             $entry = [pscustomobject]@{
                 Index        = $i
@@ -567,7 +567,7 @@ function Process-LinkFile {
             }
             $linkEntries += $entry
 
-            Show-ProgressUpdate "Target acquired: $originalUrl" -Type "Target"
+            Show-ProgressUpdate "Found: $originalUrl" -Type "Target"
         }
     }
 
@@ -598,7 +598,7 @@ function Process-LinkFile {
     foreach ($entry in $linkEntries) {
         $urlToUse = $entry.OriginalUrl
         try {
-            Show-ProgressUpdate "REAPER processing: $($entry.OriginalUrl)" -Type "Target"
+            Show-ProgressUpdate "Downloading: $($entry.OriginalUrl)" -Type "Target"
             
             $currentArgs = @($ytDlpArgs) + $urlToUse
 
@@ -607,14 +607,14 @@ function Process-LinkFile {
             if ($LASTEXITCODE -eq 0) {
                 $successCount++
                 $entry.WasSuccess = $true
-                Show-ProgressUpdate "[+] REAPER successfully harvested: $($entry.OriginalUrl)" -Type "Success"
+                Show-ProgressUpdate "[+] Downloaded: $($entry.OriginalUrl)" -Type "Success"
             } else {
-                throw "REAPER exfiltration engine reported failure for: $($entry.OriginalUrl)"
+                throw "Download failed for: $($entry.OriginalUrl)"
             }
 
         } catch {
             $failureCount++
-            Show-ProgressUpdate "[!] REAPER target failed: $($entry.OriginalUrl)" -Type "Error"
+            Show-ProgressUpdate "[!] Failed: $($entry.OriginalUrl)" -Type "Error"
             Write-Host "    Error: $($_.Exception.Message)" -ForegroundColor DarkRed
         }
     }
@@ -684,17 +684,17 @@ function Run-BatchMode {
     }
 
     Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Mission Summary ]---" -Color "Cyan" -Speed 30
-    Write-Host "[+] Successful extractions: " -NoNewline -ForegroundColor "White"
+    Write-Host "[+] Successful downloads: " -NoNewline -ForegroundColor "White"
     Write-Pulse -Text "$batchSuccess" -Colors @("Green", "Cyan") -Cycles 1 -Speed 300
-    Write-Host "[!] Failed extractions:     " -NoNewline -ForegroundColor "White"
+    Write-Host "[!] Failed downloads:     " -NoNewline -ForegroundColor "White"
     Write-Pulse -Text "$batchFailure" -Colors @("Red", "Yellow") -Cycles 1 -Speed 300
-    Write-Host "Downloads saved to:        " -NoNewline -ForegroundColor "White"
+    Write-Host "Downloads saved to:       " -NoNewline -ForegroundColor "White"
     Write-Host "$script:DownloadsDir" -ForegroundColor "Yellow"
 
     if ($batchSuccess -gt 0) {
         Show-CompletionBanner
     } else {
-        Write-Pulse -Text "`n[!] DIGITAL REAPER MISSION COMPROMISED: All batch targets failed." -Colors @("Red", "DarkRed") -Cycles 3
+        Write-Pulse -Text "`n[!] DIGITAL REAPER: All downloads failed." -Colors @("Red", "DarkRed") -Cycles 3
     }
 }
 
@@ -750,7 +750,7 @@ function Run-InteractiveMode {
 
     foreach ($url in $urls) {
         try {
-            Show-ProgressUpdate "REAPER processing: $url" -Type "Target"
+            Show-ProgressUpdate "Downloading: $url" -Type "Target"
             
             $currentArgs = @($ytDlpArgs) + $url
             
@@ -758,30 +758,30 @@ function Run-InteractiveMode {
             
             if ($LASTEXITCODE -eq 0) {
                 $successCount++
-                Show-ProgressUpdate "[+] REAPER successfully harvested: $url" -Type "Success"
+                Show-ProgressUpdate "[+] Downloaded: $url" -Type "Success"
             } else {
-                throw "REAPER exfiltration engine reported failure for: $url"
+                throw "Download failed for: $url"
             }
             
         } catch {
             $failureCount++
-            Show-ProgressUpdate "[!] REAPER target failed: $url" -Type "Error"
+            Show-ProgressUpdate "[!] Failed: $url" -Type "Error"
             Write-Host "    Error: $($_.Exception.Message)" -ForegroundColor DarkRed
         }
     }
 
     Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Mission Summary ]---" -Color "Cyan" -Speed 30
-    Write-Host "[+] Successful extractions: " -NoNewline -ForegroundColor "White"
+    Write-Host "[+] Successful downloads: " -NoNewline -ForegroundColor "White"
     Write-Pulse -Text "$successCount" -Colors @("Green", "Cyan") -Cycles 1 -Speed 300
-    Write-Host "[!] Failed extractions:     " -NoNewline -ForegroundColor "White"
+    Write-Host "[!] Failed downloads:     " -NoNewline -ForegroundColor "White"
     Write-Pulse -Text "$failureCount" -Colors @("Red", "Yellow") -Cycles 1 -Speed 300
-    Write-Host "Downloads saved to:        " -NoNewline -ForegroundColor "White"
+    Write-Host "Downloads saved to:       " -NoNewline -ForegroundColor "White"
     Write-Host "$outputDir" -ForegroundColor "Yellow"
 
     if ($successCount -gt 0) {
         Show-CompletionBanner
     } else {
-        Write-Pulse -Text "`n[!] DIGITAL REAPER MISSION COMPROMISED: All targets failed." -Colors @("Red", "DarkRed") -Cycles 3
+        Write-Pulse -Text "`n[!] DIGITAL REAPER: All downloads failed." -Colors @("Red", "DarkRed") -Cycles 3
     }
 }
 
