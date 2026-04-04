@@ -118,8 +118,8 @@ function Get-UrlsFromFile {
     if (Test-Path $FilePath) {
         $content = Get-Content $FilePath
         foreach ($line in $content) {
-            $line = $line.Trim()
-            if ($line -and !$line.StartsWith("#") -and ($line.StartsWith("http") -or $line.StartsWith("www"))) {
+            if (Test-ValidUrl -Line $line) {
+                $line = $line.Trim()
                 $urls += $line
                 Show-ProgressUpdate "Target acquired: $line" -Type "Target"
             }
@@ -147,6 +147,12 @@ function Ensure-Directory {
     if (-not (Test-Path $Path)) {
         New-Item -Path $Path -ItemType Directory -Force | Out-Null
     }
+}
+
+function Test-ValidUrl {
+    param([string]$Line)
+    $trimmed = $Line.Trim()
+    return $trimmed -and -not $trimmed.StartsWith("#") -and ($trimmed.StartsWith("http") -or $trimmed.StartsWith("www"))
 }
 
 # ===================================================================
@@ -231,9 +237,37 @@ function Initialize-DigitalReaper {
         Show-ProgressUpdate "[+] Created downloads directory" -Type "Success"
     }
 
-    # Ensure per-type output folders exist
     Ensure-Directory -Path $script:AudioOutputDir
     Ensure-Directory -Path $script:VideoOutputDir
+
+    # Create starter link files if they don't exist
+    if (-not (Test-Path $script:AudioLinksFile)) {
+        @(
+            "# DIGITAL REAPER - Audio Links",
+            "# Add one YouTube/SoundCloud/etc URL per line.",
+            "# Lines starting with # are ignored.",
+            "# Successfully downloaded links are removed automatically.",
+            "# Failed links are kept so you can retry.",
+            "#",
+            "# Example:",
+            "# https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        ) | Set-Content $script:AudioLinksFile
+        Show-ProgressUpdate "[+] Created audioLinks.txt with usage guide" -Type "System"
+    }
+
+    if (-not (Test-Path $script:VideoLinksFile)) {
+        @(
+            "# DIGITAL REAPER - Video Links",
+            "# Add one YouTube/etc URL per line.",
+            "# Lines starting with # are ignored.",
+            "# Successfully downloaded links are removed automatically.",
+            "# Failed links are kept so you can retry.",
+            "#",
+            "# Example:",
+            "# https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        ) | Set-Content $script:VideoLinksFile
+        Show-ProgressUpdate "[+] Created videoLinks.txt with usage guide" -Type "System"
+    }
     
     if (-not (Test-Path $script:YtDlpPath)) {
         Show-ProgressUpdate "[!] yt-dlp.exe not found in engine/!" -Type "Error"
@@ -289,19 +323,15 @@ function Update-YtDlpSilent {
 
 function Get-SanitizedUrls {
     param([array]$Urls)
-    
+
     $sanitizedUrls = @()
     foreach ($url in $Urls) {
-        # Remove query parameters (everything after ?) to fix download issues
-        if ($url -match '^(https?://[^?]+)') {
-            $cleanUrl = $matches[1]
-            $sanitizedUrls += $cleanUrl
-            Show-ProgressUpdate "Sanitized URL: $cleanUrl" -Type "System"
-        } else {
-            $sanitizedUrls += $url
+        $clean = $url.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($clean)) {
+            $sanitizedUrls += $clean
         }
     }
-    
+
     return $sanitizedUrls
 }
 
@@ -318,7 +348,27 @@ function Get-YtDlpArgs {
 
     $ytDlpArgs = New-Object System.Collections.Generic.List[string]
 
-    # Core robustness / tuning
+    # --- Anti-bot / stealth layer ---
+    $userAgents = @(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+    $randomUA = $userAgents[(Get-Random -Minimum 0 -Maximum $userAgents.Count)]
+    $ytDlpArgs.Add("--user-agent")
+    $ytDlpArgs.Add($randomUA)
+    $ytDlpArgs.Add("--add-header")
+    $ytDlpArgs.Add("Accept-Language:en-US,en;q=0.9")
+    $ytDlpArgs.Add("--add-header")
+    $ytDlpArgs.Add("Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+    $ytDlpArgs.Add("--sleep-requests")
+    $ytDlpArgs.Add("2")
+    $ytDlpArgs.Add("--extractor-retries")
+    $ytDlpArgs.Add("5")
+
+    Show-ProgressUpdate "[+] Anti-bot stealth layer active" -Type "System"
     $ytDlpArgs.Add("--ffmpeg-location")
     $ytDlpArgs.Add($script:BinDir)
     $ytDlpArgs.Add("--fragment-retries")
@@ -438,7 +488,7 @@ function Get-UrlsSmartMode {
     Write-TypeWriter -Text "`n--- Target Acquisition Protocol ---" -Color "Cyan" -Speed 30
     $inputMethod = ""
     while ($inputMethod -notin @("1", "2")) {
-        Show-MenuOption -Prompt "Select Input Method" -Options "1=Manual URL, 2=Load from File" -Colors @("Yellow", "Magenta")
+        Show-MenuOption -Prompt "Select Input Method" -Options "1=Manual URL, 2=Load from File"
         $inputMethod = Read-Host
         if ($inputMethod -notin @("1", "2")) { 
             Write-Pulse -Text "`n[!] Invalid command. Use 1 or 2." -Colors @("Red", "Yellow") -Cycles 2
@@ -493,20 +543,13 @@ function Process-LinkFile {
 
     for ($i = 0; $i -lt $allLines.Count; $i++) {
         $line = $allLines[$i]
-        $trim = $line.Trim()
-        if ($trim -and -not $trim.StartsWith("#") -and ($trim.StartsWith("http") -or $trim.StartsWith("www"))) {
-            $originalUrl = $trim
-
-            if ($originalUrl -match '^(https?://[^?]+)') {
-                $sanitizedUrl = $matches[1]
-            } else {
-                $sanitizedUrl = $originalUrl
-            }
+        if (Test-ValidUrl -Line $line) {
+            $originalUrl = $line.Trim()
 
             $entry = [pscustomobject]@{
                 Index        = $i
                 OriginalUrl  = $originalUrl
-                SanitizedUrl = $sanitizedUrl
+                SanitizedUrl = $originalUrl
                 WasSuccess   = $false
             }
             $linkEntries += $entry
@@ -591,7 +634,19 @@ function Should-RunBatchMode {
         return $false
     }
 
-    return (Test-Path $script:AudioLinksFile) -or (Test-Path $script:VideoLinksFile)
+    # Only enter batch mode if a link file exists AND contains at least one real URL
+    $hasAudioUrls = $false
+    $hasVideoUrls = $false
+
+    if (Test-Path $script:AudioLinksFile) {
+        $hasAudioUrls = (Get-Content $script:AudioLinksFile | Where-Object { Test-ValidUrl -Line $_ }).Count -gt 0
+    }
+
+    if (Test-Path $script:VideoLinksFile) {
+        $hasVideoUrls = (Get-Content $script:VideoLinksFile | Where-Object { Test-ValidUrl -Line $_ }).Count -gt 0
+    }
+
+    return $hasAudioUrls -or $hasVideoUrls
 }
 
 function Run-BatchMode {
@@ -644,18 +699,38 @@ function Run-InteractiveMode {
     
     $urls = Get-SanitizedUrls -Urls $urls
     
-    Show-ProgressUpdate "Loaded $($urls.Count) targets for processing" -Type "Success"
+    Show-ProgressUpdate "Loaded $($urls.Count) target(s) for processing" -Type "Success"
 
-    $downloadType = $Settings.downloadType
-    $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $downloadType -OutputDir $script:DownloadsDir
+    # --- Ask user: audio or video ---
+    $downloadType = ""
+    while ($downloadType -notin @("1", "2")) {
+        Show-MenuOption -Prompt "Select Download Type" -Options "1=Video, 2=Audio Only"
+        $downloadType = Read-Host
+        if ($downloadType -notin @("1", "2")) {
+            Write-Pulse -Text "`n[!] Invalid choice. Enter 1 for Video or 2 for Audio." -Colors @("Red", "Yellow") -Cycles 2
+        }
+    }
 
-    Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Beginning Mass Exfiltration ]---" -Color "Red" -Speed 40
+    if ($downloadType -eq "2") {
+        $resolvedType = "audio"
+        $outputDir    = $script:AudioOutputDir
+    } else {
+        $resolvedType = "video"
+        $outputDir    = $script:VideoOutputDir
+    }
+
+    Ensure-Directory -Path $outputDir
+    $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $resolvedType -OutputDir $outputDir
+
+    Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Beginning $resolvedType exfiltration ]---" -Color "Red" -Speed 40
     Write-Host "Target Count: " -NoNewline -ForegroundColor "White"
     Write-Host "$($urls.Count)" -ForegroundColor "Cyan"
     Write-Host "Output Folder:" -NoNewline -ForegroundColor "White" 
-    Write-Host " $script:DownloadsDir" -ForegroundColor "Yellow"
-    Write-Host "Quality:      " -NoNewline -ForegroundColor "White"
-    Write-Host "$($Settings.videoQuality)" -ForegroundColor "Magenta"
+    Write-Host " $outputDir" -ForegroundColor "Yellow"
+    if ($resolvedType -eq "video") {
+        Write-Host "Quality:      " -NoNewline -ForegroundColor "White"
+        Write-Host "$($Settings.videoQuality)" -ForegroundColor "Magenta"
+    }
     Write-TypeWriter -Text "-----------------------------------------------" -Color "Red" -Speed 20
 
     $successCount = 0
@@ -690,7 +765,7 @@ function Run-InteractiveMode {
     Write-Host "[!] Failed extractions:     " -NoNewline -ForegroundColor "White"
     Write-Pulse -Text "$failureCount" -Colors @("Red", "Yellow") -Cycles 1 -Speed 300
     Write-Host "Downloads saved to:        " -NoNewline -ForegroundColor "White"
-    Write-Host "$script:DownloadsDir" -ForegroundColor "Yellow"
+    Write-Host "$outputDir" -ForegroundColor "Yellow"
 
     if ($successCount -gt 0) {
         Show-CompletionBanner
