@@ -116,7 +116,7 @@ function Get-UrlsFromFile {
         $content = Get-Content $FilePath
         foreach ($line in $content) {
             if (Test-ValidUrl -Line $line) {
-                $line = $line.Trim().TrimStart([char]0xFEFF, [char]0x200B, [char]0x200C, [char]0x200D, [char]0xFFFE)
+                $line = Remove-InvisibleCharacters -Text $line
                 $urls += $line
                 Show-ProgressUpdate "Found: $line" -Type "Target"
             }
@@ -146,10 +146,15 @@ function Ensure-Directory {
     }
 }
 
+function Remove-InvisibleCharacters {
+    param([string]$Text)
+    # Strip BOM (U+FEFF) and other invisible/zero-width characters
+    return $Text.Trim().TrimStart([char]0xFEFF, [char]0x200B, [char]0x200C, [char]0x200D, [char]0xFFFE)
+}
+
 function Test-ValidUrl {
     param([string]$Line)
-    # Strip BOM (U+FEFF) and other invisible/zero-width characters before checking
-    $trimmed = $Line.Trim().TrimStart([char]0xFEFF, [char]0x200B, [char]0x200C, [char]0x200D, [char]0xFFFE)
+    $trimmed = Remove-InvisibleCharacters -Text $Line
     return $trimmed -and -not $trimmed.StartsWith("#") -and ($trimmed.StartsWith("http") -or $trimmed.StartsWith("www"))
 }
 
@@ -558,7 +563,7 @@ function Process-LinkFile {
     for ($i = 0; $i -lt $allLines.Count; $i++) {
         $line = $allLines[$i]
         if (Test-ValidUrl -Line $line) {
-            $originalUrl = $line.Trim().TrimStart([char]0xFEFF, [char]0x200B, [char]0x200C, [char]0x200D, [char]0xFFFE)
+            $originalUrl = Remove-InvisibleCharacters -Text $line
 
             $entry = [pscustomobject]@{
                 Index        = $i
@@ -688,7 +693,7 @@ function Run-BatchMode {
     Write-Pulse -Text "$batchSuccess" -Colors @("Green", "Cyan") -Cycles 1 -Speed 300
     Write-Host "[!] Failed downloads:     " -NoNewline -ForegroundColor "White"
     Write-Pulse -Text "$batchFailure" -Colors @("Red", "Yellow") -Cycles 1 -Speed 300
-    Write-Host "Downloads saved to:       " -NoNewline -ForegroundColor "White"
+    Write-Host "    Downloads saved to:   " -NoNewline -ForegroundColor "White"
     Write-Host "$script:DownloadsDir" -ForegroundColor "Yellow"
 
     if ($batchSuccess -gt 0) {
@@ -775,7 +780,7 @@ function Run-InteractiveMode {
     Write-Pulse -Text "$successCount" -Colors @("Green", "Cyan") -Cycles 1 -Speed 300
     Write-Host "[!] Failed downloads:     " -NoNewline -ForegroundColor "White"
     Write-Pulse -Text "$failureCount" -Colors @("Red", "Yellow") -Cycles 1 -Speed 300
-    Write-Host "Downloads saved to:       " -NoNewline -ForegroundColor "White"
+    Write-Host "    Downloads saved to:   " -NoNewline -ForegroundColor "White"
     Write-Host "$outputDir" -ForegroundColor "Yellow"
 
     if ($successCount -gt 0) {
