@@ -10,3 +10,5 @@ downloads/
 
 # VS Code / editor settings
 .vscode/
+# User settings
+settings.json
