@@ -150,6 +150,30 @@ function Ensure-Directory {
     }
 }
 
+function Show-DownloadBanner {
+    param(
+        [string]$TypeLabel,
+        [string]$Mode,          # "BATCH" or "EXFILTRATION"
+        [int]$TargetCount,
+        [string]$OutputDir,
+        [string]$Quality = ""
+    )
+    Write-Host ""
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
+    Write-Host "  |  DIGITAL REAPER  >>  $TypeLabel $Mode" -ForegroundColor Red
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
+    Write-Host "  | Targets : " -NoNewline -ForegroundColor Gray
+    Write-Host "$TargetCount" -ForegroundColor Cyan
+    Write-Host "  | Output  : " -NoNewline -ForegroundColor Gray
+    Write-Host $OutputDir -ForegroundColor Yellow
+    if ($Quality) {
+        Write-Host "  | Quality : " -NoNewline -ForegroundColor Gray
+        Write-Host $Quality -ForegroundColor Magenta
+    }
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
+    Write-Host ""
+}
+
 function Remove-InvisibleCharacters {
     param([string]$Text)
     # Strip BOM (U+FEFF) and other invisible/zero-width characters
@@ -252,14 +276,18 @@ function Install-YtDlp {
 }
 
 function Install-Ffmpeg {
-    Show-ProgressUpdate "[~] ffmpeg not found — downloading essentials build..." -Type "Update"
+    Show-ProgressUpdate "[~] ffmpeg not found — downloading essentials build (this may take a minute)..." -Type "Update"
     $zipUrl  = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
     $zipPath = Join-Path $env:TEMP "ffmpeg-reaper.zip"
     $extractPath = Join-Path $env:TEMP "ffmpeg-reaper"
     try {
         Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -TimeoutSec 180 -ErrorAction Stop
 
+        $zipItem = Get-Item $zipPath -ErrorAction SilentlyContinue
+        if (-not $zipItem -or $zipItem.Length -eq 0) { throw "Downloaded zip is empty." }
+
         if (Test-Path $extractPath) { Remove-Item $extractPath -Recurse -Force }
+        Show-ProgressUpdate "[~] Extracting ffmpeg archive..." -Type "System"
         Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force -ErrorAction Stop
 
         # The zip contains a single top-level folder; ffmpeg.exe is in its bin/ subfolder
@@ -268,6 +296,10 @@ function Install-Ffmpeg {
         if (-not $ffmpegExe) { throw "ffmpeg.exe not found inside archive." }
 
         Copy-Item $ffmpegExe.FullName $script:FfmpegPath -Force -ErrorAction Stop
+
+        $installed = Get-Item $script:FfmpegPath -ErrorAction SilentlyContinue
+        if (-not $installed -or $installed.Length -eq 0) { throw "Copied ffmpeg.exe is empty." }
+
         Show-ProgressUpdate "[+] ffmpeg installed" -Type "Success"
         return $true
     } catch {
@@ -622,21 +654,8 @@ function Process-LinkFile {
 
     $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir
 
-    $typeLabel = $DownloadType.ToUpper()
-    Write-Host ""
-    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
-    Write-Host "  |  DIGITAL REAPER  >>  $typeLabel BATCH" -ForegroundColor Red
-    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
-    Write-Host "  | Targets : " -NoNewline -ForegroundColor Gray
-    Write-Host "$($linkEntries.Count)" -ForegroundColor Cyan
-    Write-Host "  | Output  : " -NoNewline -ForegroundColor Gray
-    Write-Host $OutputDir -ForegroundColor Yellow
-    if ($DownloadType -eq "video") {
-        Write-Host "  | Quality : " -NoNewline -ForegroundColor Gray
-        Write-Host "$($Settings.videoQuality)" -ForegroundColor Magenta
-    }
-    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
-    Write-Host ""
+    $quality = if ($DownloadType -eq "video") { $Settings.videoQuality } else { "" }
+    Show-DownloadBanner -TypeLabel $DownloadType.ToUpper() -Mode "BATCH" -TargetCount $linkEntries.Count -OutputDir $OutputDir -Quality $quality
 
     $successCount = 0
     $failureCount = 0
@@ -787,21 +806,8 @@ function Run-InteractiveMode {
     Ensure-Directory -Path $outputDir
     $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $resolvedType -OutputDir $outputDir
 
-    $typeLabel = $resolvedType.ToUpper()
-    Write-Host ""
-    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
-    Write-Host "  |  DIGITAL REAPER  >>  $typeLabel EXFILTRATION" -ForegroundColor Red
-    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
-    Write-Host "  | Targets : " -NoNewline -ForegroundColor Gray
-    Write-Host "$($urls.Count)" -ForegroundColor Cyan
-    Write-Host "  | Output  : " -NoNewline -ForegroundColor Gray
-    Write-Host $outputDir -ForegroundColor Yellow
-    if ($resolvedType -eq "video") {
-        Write-Host "  | Quality : " -NoNewline -ForegroundColor Gray
-        Write-Host "$($Settings.videoQuality)" -ForegroundColor Magenta
-    }
-    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
-    Write-Host ""
+    $quality = if ($resolvedType -eq "video") { $Settings.videoQuality } else { "" }
+    Show-DownloadBanner -TypeLabel $resolvedType.ToUpper() -Mode "EXFILTRATION" -TargetCount $urls.Count -OutputDir $outputDir -Quality $quality
 
     $successCount = 0
     $failureCount = 0

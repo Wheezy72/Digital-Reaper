@@ -70,8 +70,8 @@ if "%CHOICE%"=="1" (
     exit /b 1
 )
 
-REM --- Register the task (runs whether logged in or not, at SYSTEM level)
-schtasks /create /tn "%TASK_NAME%" /tr "cmd.exe /c \"%BAT_PATH%\"" %SCHEDULE_ARGS% /ru SYSTEM /rl HIGHEST /f >nul 2>&1
+REM --- Register the task (runs as the current user)
+schtasks /create /tn "%TASK_NAME%" /tr "cmd.exe /c \"%BAT_PATH%\"" %SCHEDULE_ARGS% /ru %USERNAME% /rl HIGHEST /f >nul 2>&1
 
 if %errorlevel% equ 0 (
     echo.
