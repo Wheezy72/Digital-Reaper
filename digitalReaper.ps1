@@ -32,6 +32,9 @@ $script:VideoLinksFile = Join-Path $script:ScriptDir "videoLinks.txt"
 $script:AudioOutputDir = Join-Path $script:DownloadsDir "audio"
 $script:VideoOutputDir = Join-Path $script:DownloadsDir "videos"
 
+# Tracks the source file used by interactive mode (for post-download cleanup)
+$script:SourceFile = ""
+
 # ===================================================================
 # --- ENHANCED AESTHETIC FUNCTIONS ---
 # ===================================================================
@@ -116,10 +119,11 @@ function Get-UrlsFromFile {
         $content = Get-Content $FilePath
         foreach ($line in $content) {
             if (Test-ValidUrl -Line $line) {
-                $line = Remove-InvisibleCharacters -Text $line
-                $urls += $line
-                Show-ProgressUpdate "Found: $line" -Type "Target"
+                $urls += Remove-InvisibleCharacters -Text $line
             }
+        }
+        if ($urls.Count -gt 0) {
+            Show-ProgressUpdate "[+] $($urls.Count) target(s) loaded from file" -Type "Target"
         }
     }
     return $urls
@@ -388,7 +392,6 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--extractor-retries")
     $ytDlpArgs.Add("5")
 
-    Show-ProgressUpdate "[+] Preparing download..." -Type "System"
     $ytDlpArgs.Add("--ffmpeg-location")
     $ytDlpArgs.Add($script:EngineDir)
     $ytDlpArgs.Add("--fragment-retries")
@@ -402,10 +405,7 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--no-warnings")
     $ytDlpArgs.Add("--console-title")
 
-    Show-ProgressUpdate "[+] Download engine ready" -Type "Success"
-
     if ($DownloadType -eq "video" -and $Settings.downloadSubtitles) {
-        Show-ProgressUpdate "Subtitles enabled" -Type "Success"
         $ytDlpArgs.Add("--write-auto-sub")
         $ytDlpArgs.Add("--write-sub")
         $ytDlpArgs.Add("--sub-lang")
@@ -415,7 +415,6 @@ function Get-YtDlpArgs {
     }
 
     if ($DownloadType -eq "audio") {
-        Write-TypeWriter -Text "[*] Configuring audio-only download..." -Color "Yellow" -Speed 30
         $ytDlpArgs.Add("--extract-audio")
         $ytDlpArgs.Add("--audio-format")
         $ytDlpArgs.Add($Settings.audioFormat)
@@ -432,22 +431,13 @@ function Get-YtDlpArgs {
             default { 1080 }
         }
 
-        Write-TypeWriter -Text "[*] Configuring video download at $($Settings.videoQuality)..." -Color "Green" -Speed 30
         $format = "($codecPreference" + "bestvideo[height<=$height])+bestaudio/best[height<=$height]"
 
         $ytDlpArgs.Add("-f")
         $ytDlpArgs.Add($format)
         $ytDlpArgs.Add("--merge-output-format")
         $ytDlpArgs.Add("mp4")
-
-        if ($Settings.useHEVC) {
-            Show-ProgressUpdate "HEVC/H.265 preferred" -Type "Success"
-        }
     }
-
-    Show-ProgressUpdate "Saving to: $OutputDir" -Type "Success"
-    Write-Host "    Output folder: " -NoNewline -ForegroundColor "Gray"
-    Write-Host $OutputDir -ForegroundColor "Yellow"
 
     $outputTemplate = Join-Path -Path $OutputDir -ChildPath $Settings.outputTemplate
     $ytDlpArgs.Add("-o")
@@ -496,11 +486,13 @@ function Get-UrlsSmartMode {
 
     if ($LinksFile -and (Test-Path $LinksFile)) {
         Show-ProgressUpdate "[+] Processing file from batch: $LinksFile" -Type "System"
+        $script:SourceFile = $LinksFile
         return Get-UrlsFromFile -FilePath $LinksFile
     }
     
     if (Test-Path $script:DefaultLinksFile) {
         Show-ProgressUpdate "[+] Found links.txt in script directory" -Type "System"
+        $script:SourceFile = $script:DefaultLinksFile
         return Get-UrlsFromFile -FilePath $script:DefaultLinksFile
     }
     
@@ -535,6 +527,7 @@ function Get-UrlsSmartMode {
                 Write-Pulse -Text "`n[!] File not found: $filePath" -Colors @("Red", "Yellow") -Cycles 1
             }
         }
+        $script:SourceFile = $filePath
         return Get-UrlsFromFile -FilePath $filePath
     }
 }
@@ -571,8 +564,6 @@ function Process-LinkFile {
                 WasSuccess   = $false
             }
             $linkEntries += $entry
-
-            Show-ProgressUpdate "Found: $originalUrl" -Type "Target"
         }
     }
 
@@ -586,24 +577,34 @@ function Process-LinkFile {
 
     $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir
 
-    Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Beginning $DownloadType batch ]---" -Color "Red" -Speed 40
-    Write-Host "Target Count: " -NoNewline -ForegroundColor "White"
-    Write-Host "$($linkEntries.Count)" -ForegroundColor "Cyan"
-    Write-Host "Output Folder:" -NoNewline -ForegroundColor "White"
-    Write-Host " $OutputDir" -ForegroundColor "Yellow"
+    $typeLabel = $DownloadType.ToUpper()
+    Write-Host ""
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
+    Write-Host "  |  DIGITAL REAPER  >>  $typeLabel BATCH              |" -ForegroundColor Red
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
+    Write-Host "  | Targets : " -NoNewline -ForegroundColor Gray
+    Write-Host "$($linkEntries.Count)" -NoNewline -ForegroundColor Cyan
+    Write-Host "  |  Output : " -NoNewline -ForegroundColor Gray
+    Write-Host (Split-Path $OutputDir -Leaf) -ForegroundColor Yellow
     if ($DownloadType -eq "video") {
-        Write-Host "Quality:      " -NoNewline -ForegroundColor "White"
-        Write-Host "$($Settings.videoQuality)" -ForegroundColor "Magenta"
+        Write-Host "  | Quality : " -NoNewline -ForegroundColor Gray
+        Write-Host "$($Settings.videoQuality)" -ForegroundColor Magenta
     }
-    Write-TypeWriter -Text "-----------------------------------------------" -Color "Red" -Speed 20
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
+    Write-Host ""
 
     $successCount = 0
     $failureCount = 0
+    $targetNum = 0
 
     foreach ($entry in $linkEntries) {
         $urlToUse = $entry.OriginalUrl
+        $targetNum++
         try {
-            Show-ProgressUpdate "Downloading: $($entry.OriginalUrl)" -Type "Target"
+            Write-Host "  [ $targetNum/$($linkEntries.Count) ] " -NoNewline -ForegroundColor DarkGray
+            Write-Host "ACQUIRING TARGET" -NoNewline -ForegroundColor Cyan
+            Write-Host " >> " -NoNewline -ForegroundColor DarkGray
+            Write-Host $urlToUse -ForegroundColor White
             
             $currentArgs = @($ytDlpArgs) + $urlToUse
 
@@ -612,16 +613,18 @@ function Process-LinkFile {
             if ($LASTEXITCODE -eq 0) {
                 $successCount++
                 $entry.WasSuccess = $true
-                Show-ProgressUpdate "[+] Downloaded: $($entry.OriginalUrl)" -Type "Success"
+                Write-Host "  [ $targetNum/$($linkEntries.Count) ] " -NoNewline -ForegroundColor DarkGray
+                Write-Host "TARGET ACQUIRED" -ForegroundColor Green
             } else {
-                throw "Download failed for: $($entry.OriginalUrl)"
+                throw "yt-dlp exited with code $LASTEXITCODE"
             }
 
         } catch {
             $failureCount++
-            Show-ProgressUpdate "[!] Failed: $($entry.OriginalUrl)" -Type "Error"
-            Write-Host "    Error: $($_.Exception.Message)" -ForegroundColor DarkRed
+            Write-Host "  [ $targetNum/$($linkEntries.Count) ] " -NoNewline -ForegroundColor DarkGray
+            Write-Host "TARGET MISSED  >> $($_.Exception.Message)" -ForegroundColor Red
         }
+        Write-Host ""
     }
 
     $linesOut = New-Object System.Collections.Generic.List[string]
@@ -636,7 +639,7 @@ function Process-LinkFile {
         }
     }
 
-    $linesOut | Set-Content $FilePath
+    Set-Content -Path $FilePath -Value $linesOut.ToArray()
 
     return [pscustomobject]@{
         Success = $successCount
@@ -739,40 +742,71 @@ function Run-InteractiveMode {
     Ensure-Directory -Path $outputDir
     $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $resolvedType -OutputDir $outputDir
 
-    Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Beginning $resolvedType exfiltration ]---" -Color "Red" -Speed 40
-    Write-Host "Target Count: " -NoNewline -ForegroundColor "White"
-    Write-Host "$($urls.Count)" -ForegroundColor "Cyan"
-    Write-Host "Output Folder:" -NoNewline -ForegroundColor "White" 
-    Write-Host " $outputDir" -ForegroundColor "Yellow"
+    $typeLabel = $resolvedType.ToUpper()
+    Write-Host ""
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
+    Write-Host "  |  DIGITAL REAPER  >>  $typeLabel EXFILTRATION         |" -ForegroundColor Red
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
+    Write-Host "  | Targets : " -NoNewline -ForegroundColor Gray
+    Write-Host "$($urls.Count)" -NoNewline -ForegroundColor Cyan
+    Write-Host "  |  Output : " -NoNewline -ForegroundColor Gray
+    Write-Host (Split-Path $outputDir -Leaf) -ForegroundColor Yellow
     if ($resolvedType -eq "video") {
-        Write-Host "Quality:      " -NoNewline -ForegroundColor "White"
-        Write-Host "$($Settings.videoQuality)" -ForegroundColor "Magenta"
+        Write-Host "  | Quality : " -NoNewline -ForegroundColor Gray
+        Write-Host "$($Settings.videoQuality)" -ForegroundColor Magenta
     }
-    Write-TypeWriter -Text "-----------------------------------------------" -Color "Red" -Speed 20
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
+    Write-Host ""
 
     $successCount = 0
     $failureCount = 0
+    $successUrls  = @()
+    $targetNum    = 0
 
     foreach ($url in $urls) {
+        $targetNum++
         try {
-            Show-ProgressUpdate "Downloading: $url" -Type "Target"
-            
+            Write-Host "  [ $targetNum/$($urls.Count) ] " -NoNewline -ForegroundColor DarkGray
+            Write-Host "ACQUIRING TARGET" -NoNewline -ForegroundColor Cyan
+            Write-Host " >> " -NoNewline -ForegroundColor DarkGray
+            Write-Host $url -ForegroundColor White
+
             $currentArgs = @($ytDlpArgs) + $url
             
             & $script:YtDlpPath $currentArgs
             
             if ($LASTEXITCODE -eq 0) {
                 $successCount++
-                Show-ProgressUpdate "[+] Downloaded: $url" -Type "Success"
+                $successUrls += $url
+                Write-Host "  [ $targetNum/$($urls.Count) ] " -NoNewline -ForegroundColor DarkGray
+                Write-Host "TARGET ACQUIRED" -ForegroundColor Green
             } else {
-                throw "Download failed for: $url"
+                throw "yt-dlp exited with code $LASTEXITCODE"
             }
             
         } catch {
             $failureCount++
-            Show-ProgressUpdate "[!] Failed: $url" -Type "Error"
-            Write-Host "    Error: $($_.Exception.Message)" -ForegroundColor DarkRed
+            Write-Host "  [ $targetNum/$($urls.Count) ] " -NoNewline -ForegroundColor DarkGray
+            Write-Host "TARGET MISSED  >> $($_.Exception.Message)" -ForegroundColor Red
         }
+        Write-Host ""
+    }
+
+    # Remove successfully downloaded links from the source file
+    if ($script:SourceFile -and (Test-Path $script:SourceFile) -and $successUrls.Count -gt 0) {
+        $allLines = @(Get-Content $script:SourceFile)
+        $linesOut = New-Object System.Collections.Generic.List[string]
+        foreach ($line in $allLines) {
+            if (Test-ValidUrl -Line $line) {
+                $cleanLine = Remove-InvisibleCharacters -Text $line
+                if ($successUrls -notcontains $cleanLine) {
+                    $linesOut.Add($line)
+                }
+            } else {
+                $linesOut.Add($line)
+            }
+        }
+        Set-Content -Path $script:SourceFile -Value $linesOut.ToArray()
     }
 
     Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Mission Summary ]---" -Color "Cyan" -Speed 30
