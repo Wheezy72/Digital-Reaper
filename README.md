@@ -17,6 +17,8 @@ Made by **Wheezy**
 - **📁 Drag & Drop** - Drop a `.txt` links file or `.json` manifest on the launcher
 - **🎨 Beautiful Interface** - Purple-blue gradient ASCII art
 - **🔒 Clean Directory** - Auto-hides technical files
+- **📊 Live Progress** - Real-time download speed and ETA displayed per file
+- **⏰ Task Scheduler** - Automate downloads on a set interval
 
 ---
 
@@ -51,6 +53,7 @@ Digital Reaper will:
 - Download:
   - audio → `downloads\audio\`
   - video → `downloads\videos\`
+- Show **live speed and ETA** for every file as it downloads
 - Remove **only** successfully downloaded lines from the text files  
   (failed URLs stay for the next run)
 
@@ -91,6 +94,35 @@ If you run `digitalReaper.bat` with **no** `audioLinks.txt`/`videoLinks.txt` and
 
 ---
 
+### 5. Automated / Scheduled mode
+
+Run downloads hands-free on a repeating schedule using a single script — **`scheduler.bat`**:
+
+1. Add your URLs to `audioLinks.txt` / `videoLinks.txt` as normal
+2. **Double-click** `scheduler.bat` — a menu appears:
+
+   ```
+   1 = Schedule  (register / update automated task)
+   2 = Remove    (unregister scheduled task)
+   3 = Run Now   (one silent background run)
+   4 = Status    (check if task is registered)
+   5 = Exit
+   ```
+
+3. Choose **1** and pick an interval:
+   - Every hour / 4 hours / 12 hours
+   - Daily at midnight
+   - Weekly on Sunday at midnight
+
+Digital Reaper registers a Windows Scheduled Task named **DigitalReaper** that silently calls `scheduler.bat /silent` on your chosen schedule.
+
+> **To remove the task:** open `scheduler.bat` → option **2**  
+> **To view/edit it:** open Windows Task Scheduler (`taskschd.msc`)
+
+When running silently in the background, Digital Reaper processes any URLs in `audioLinks.txt` / `videoLinks.txt` and removes them as they succeed — so the lists stay clean between runs.
+
+---
+
 ## ⚙️ Configuration
 
 Edit `settings.json` to customize behavior.
@@ -108,6 +140,7 @@ For a description of each setting, see `downloads/settings.txt`.
 
 ## 📁 File Structure
 
+```
 📁 DigitalReaper/
 ├── 📄 digitalReaper.bat       (🎯 Main launcher)
 ├── 📄 digitalReaper.ps1       (👻 Main PowerShell engine – usually hidden)
@@ -116,6 +149,7 @@ For a description of each setting, see `downloads/settings.txt`.
 ├── 📄 videoLinks.txt          (📼 Batch video URLs – optional)
 ├── 📄 initDigitalReaper.ps1   (🚀 One-time engine bootstrap – self-deletes)
 ├── 📄 cleanup.bat             (🧹 Hides internal files for a clean view)
+├── 📄 scheduler.bat           (⏰ Schedule / remove / run / status — all in one)
 ├── 📄 README.md               (📖 This file)
 ├── 📁 engine/                 (⚙️ Internal binaries)
 │   ├── yt-dlp.exe             (Downloader binary)
@@ -123,33 +157,32 @@ For a description of each setting, see `downloads/settings.txt`.
 └── 📁 downloads/              (📥 Output folder)
     ├── audio/                 (Extracted audio)
     └── videos/                (Video files)
+```
 
 Extra helper:
 - `downloads/settings.txt` – human-readable guide to all `settings.json` options
-
-text
 
 ---
 
 ## 💡 Usage Examples
 
 ### **Single Video:**
+```
 https://youtu.be/xvFZjo5PgG0?si=Nr5n3YLI442ixGDi
-
-text
+```
 
 ### **Playlist:**
+```
 https://youtube.com/playlist?list=PLo_mCdoeO0g9WdS38ko_bpVWPp23DvxPr&si=Nithu0Rq7tLyEO-2
+```
 
-text
-
-### **Batch File (links.txt):**
+### **Batch File (videoLinks.txt):**
+```
 Digital Reaper Links
 https://www.youtube.com/watch?v=dQw4w9WgXcQ
 https://www.youtube.com/watch?v=oHg5SJYRHA0
 https://youtu.be/9bZkp7q19f0
-
-text
+```
 
 ---
 
@@ -166,9 +199,9 @@ text
 ## 🔧 Troubleshooting
 
 ### **"Execution Policy" Error:**
+```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-
-text
+```
 
 ### **Download Fails:**
 - Check URL is valid and accessible
@@ -179,6 +212,11 @@ text
 - Verify `settings.json` has valid JSON syntax
 - Use `downloads/settings-guide.txt` for reference
 - Delete `settings.json` to reset to defaults
+
+### **Scheduled Task Fails:**
+- Run `scheduler.bat` **as Administrator** if task creation is blocked
+- Make sure `audioLinks.txt` / `videoLinks.txt` have URLs in them before the task fires
+- To confirm the task is registered: open Task Scheduler (`taskschd.msc`) and look for **DigitalReaper**
 
 ---
 
