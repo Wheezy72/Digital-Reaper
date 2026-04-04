@@ -481,6 +481,8 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("7")
     $ytDlpArgs.Add("--no-warnings")
     $ytDlpArgs.Add("--console-title")
+    $ytDlpArgs.Add("--progress")
+    $ytDlpArgs.Add("--newline")
 
     if ($DownloadType -eq "video" -and $Settings.downloadSubtitles) {
         $ytDlpArgs.Add("--write-auto-sub")
@@ -624,7 +626,6 @@ function Process-LinkFile {
         }
     }
 
-    Show-ProgressUpdate "[+] Processing link file: $FilePath" -Type "System"
     Ensure-Directory -Path $OutputDir
 
     $allLines = @(Get-Content $FilePath)
