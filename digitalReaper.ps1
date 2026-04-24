@@ -21,6 +21,7 @@ $script:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:EngineDir   = Join-Path $script:ScriptDir "engine"
 $script:YtDlpPath   = Join-Path $script:EngineDir "yt-dlp.exe"
 $script:FfmpegPath  = Join-Path $script:EngineDir "ffmpeg.exe"
+$script:FfprobePath = Join-Path $script:EngineDir "ffprobe.exe"
 
 $script:DownloadsDir      = Join-Path $script:ScriptDir "downloads"
 $script:DefaultLinksFile  = Join-Path $script:ScriptDir "links.txt"
@@ -269,12 +270,14 @@ function Install-YtDlp {
 }
 
 function Install-Ffmpeg {
-    Show-ProgressUpdate "[~] ffmpeg not found — downloading essentials build (this may take a minute)..." -Type "Update"
-    $zipUrl  = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
+    Show-ProgressUpdate "[~] ffmpeg not found — downloading static build (this may take a minute)..." -Type "Update"
+    # Use the static (non-shared) GPL build so ffmpeg.exe and ffprobe.exe are
+    # self-contained executables with no companion DLLs required.
+    $zipUrl  = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
     $zipPath = Join-Path $env:TEMP "ffmpeg-reaper.zip"
     $extractPath = Join-Path $env:TEMP "ffmpeg-reaper"
     try {
-        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -TimeoutSec 180 -ErrorAction Stop
+        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -TimeoutSec 300 -ErrorAction Stop
 
         $zipItem = Get-Item $zipPath -ErrorAction SilentlyContinue
         if (-not $zipItem -or $zipItem.Length -eq 0) { throw "Downloaded zip is empty." }
@@ -283,23 +286,41 @@ function Install-Ffmpeg {
         Show-ProgressUpdate "[~] Extracting ffmpeg archive..." -Type "System"
         Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force -ErrorAction Stop
 
-        # The zip contains a single top-level folder; ffmpeg.exe is in its bin/ subfolder
+        # Locate ffmpeg.exe (lives in the bin/ subfolder of the top-level archive folder)
         $ffmpegExe = Get-ChildItem -Path $extractPath -Filter "ffmpeg.exe" -Recurse -ErrorAction SilentlyContinue |
                      Select-Object -First 1
         if (-not $ffmpegExe) { throw "ffmpeg.exe not found inside archive." }
 
-        Copy-Item $ffmpegExe.FullName $script:FfmpegPath -Force -ErrorAction Stop
+        # Locate ffprobe.exe — yt-dlp needs it alongside ffmpeg.exe
+        $ffprobeExe = Get-ChildItem -Path $extractPath -Filter "ffprobe.exe" -Recurse -ErrorAction SilentlyContinue |
+                      Select-Object -First 1
+        if (-not $ffprobeExe) { throw "ffprobe.exe not found inside archive." }
 
-        $installed = Get-Item $script:FfmpegPath -ErrorAction SilentlyContinue
-        if (-not $installed -or $installed.Length -eq 0) { throw "Copied ffmpeg.exe is empty." }
+        Copy-Item $ffmpegExe.FullName  $script:FfmpegPath  -Force -ErrorAction Stop
+        Copy-Item $ffprobeExe.FullName $script:FfprobePath -Force -ErrorAction Stop
 
-        Show-ProgressUpdate "[+] ffmpeg installed" -Type "Success"
+        # Verify files are non-empty
+        $installedFfmpeg  = Get-Item $script:FfmpegPath  -ErrorAction SilentlyContinue
+        $installedFfprobe = Get-Item $script:FfprobePath -ErrorAction SilentlyContinue
+        if (-not $installedFfmpeg  -or $installedFfmpeg.Length  -eq 0) { throw "Copied ffmpeg.exe is empty." }
+        if (-not $installedFfprobe -or $installedFfprobe.Length -eq 0) { throw "Copied ffprobe.exe is empty." }
+
+        # Functional verification — make sure both binaries actually run
+        $null = & $script:FfmpegPath  -version 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "ffmpeg.exe failed functional verification (exit code $LASTEXITCODE)." }
+        $null = & $script:FfprobePath -version 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "ffprobe.exe failed functional verification (exit code $LASTEXITCODE)." }
+
+        Show-ProgressUpdate "[+] ffmpeg and ffprobe installed" -Type "Success"
         return $true
     } catch {
-        Show-ProgressUpdate "[!] Failed to download ffmpeg: $($_.Exception.Message)" -Type "Error"
+        Show-ProgressUpdate "[!] Failed to install ffmpeg: $($_.Exception.Message)" -Type "Error"
+        # Remove any partial files so the next launch will retry cleanly
+        Remove-Item $script:FfmpegPath  -Force -ErrorAction SilentlyContinue
+        Remove-Item $script:FfprobePath -Force -ErrorAction SilentlyContinue
         return $false
     } finally {
-        Remove-Item $zipPath    -Force -ErrorAction SilentlyContinue
+        Remove-Item $zipPath     -Force -ErrorAction SilentlyContinue
         Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
@@ -353,12 +374,14 @@ function Initialize-DigitalReaper {
         if (-not (Install-YtDlp)) { return $false }
     }
     
-    if (-not (Test-Path $script:FfmpegPath)) {
+    # Reinstall if either ffmpeg.exe or ffprobe.exe is missing
+    if (-not (Test-Path $script:FfmpegPath) -or -not (Test-Path $script:FfprobePath)) {
         if (-not (Install-Ffmpeg)) { return $false }
     }
     
     Set-HiddenAttribute -Path $script:YtDlpPath
     Set-HiddenAttribute -Path $script:FfmpegPath
+    Set-HiddenAttribute -Path $script:FfprobePath
     Set-HiddenAttribute -Path $script:EngineDir
     
     Show-ProgressUpdate "[+] All DIGITAL REAPER components ready" -Type "Success"
