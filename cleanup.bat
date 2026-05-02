@@ -13,7 +13,7 @@ echo Only essential files will remain visible after cleanup.
 echo.
 
 REM List of files and folders to keep visible
-set "VISIBLE_FILES=digitalReaper.bat settings.json README.md downloads cleanup.bat audioLinks.txt videoLinks.txt"
+set "VISIBLE_FILES=digitalReaper.bat scheduler.bat settings.json README.md downloads cleanup.bat audioLinks.txt videoLinks.txt"
 
 echo [INFO] Starting directory cleanup...
 echo [INFO] Files to keep visible: %VISIBLE_FILES%
