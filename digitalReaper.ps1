@@ -7,15 +7,14 @@
 #>
 
 param(
-    [string]$LinksFile = "",
-    [string]$ConfigFile = ""
+    [string]$LinksFile  = "",
+    [string]$ConfigFile = "",
+    [switch]$Silent
 )
 
 # ===================================================================
 # --- SCRIPT CONFIGURATION ---
 # ===================================================================
-
-$YTDLP_CURRENT_VERSION = "2024.12.06"
 
 $script:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:EngineDir   = Join-Path $script:ScriptDir "engine"
@@ -35,6 +34,12 @@ $script:VideoOutputDir = Join-Path $script:DownloadsDir "videos"
 
 # Tracks the source file used by interactive mode (for post-download cleanup)
 $script:SourceFile = ""
+
+# Lock file — prevents concurrent scheduled runs
+$script:LockFilePath = Join-Path $script:EngineDir "reaper.lock"
+
+# Version file — persists the installed yt-dlp version across runs
+$script:VersionFilePath = Join-Path $script:EngineDir "version.txt"
 
 # ===================================================================
 # --- ENHANCED AESTHETIC FUNCTIONS ---
@@ -196,6 +201,17 @@ function Get-DefaultSettings {
     }
 }
 
+function Merge-SettingsFromFile {
+    param([hashtable]$Settings, [string]$FilePath)
+    if (-not (Test-Path $FilePath)) { return }
+    $userSettings = Get-Content $FilePath | ConvertFrom-Json
+    foreach ($key in $userSettings.PSObject.Properties.Name) {
+        if ($Settings.ContainsKey($key)) {
+            $Settings[$key] = $userSettings.$key
+        }
+    }
+}
+
 function Load-Settings {
     param([string]$ConfigPath)
     
@@ -203,24 +219,14 @@ function Load-Settings {
     
     if ($ConfigPath -and (Test-Path $ConfigPath)) {
         try {
-            $userSettings = Get-Content $ConfigPath | ConvertFrom-Json
-            foreach ($key in $userSettings.PSObject.Properties.Name) {
-                if ($settings.ContainsKey($key)) {
-                    $settings[$key] = $userSettings.$key
-                }
-            }
+            Merge-SettingsFromFile -Settings $settings -FilePath $ConfigPath
             Show-ProgressUpdate "Settings loaded from: $ConfigPath" -Type "Success"
         } catch {
             Show-ProgressUpdate "Error loading settings file. Using defaults." -Type "Warning"
         }
     } elseif (Test-Path $script:DefaultConfigFile) {
         try {
-            $userSettings = Get-Content $script:DefaultConfigFile | ConvertFrom-Json
-            foreach ($key in $userSettings.PSObject.Properties.Name) {
-                if ($settings.ContainsKey($key)) {
-                    $settings[$key] = $userSettings.$key
-                }
-            }
+            Merge-SettingsFromFile -Settings $settings -FilePath $script:DefaultConfigFile
             Show-ProgressUpdate "Settings loaded from: settings.json" -Type "Success"
         } catch {
             Show-ProgressUpdate "Error loading settings. Using defaults." -Type "Warning"
@@ -262,6 +268,7 @@ function Install-YtDlp {
         if (-not $downloaded -or $downloaded.Length -eq 0) { throw "Downloaded file is empty." }
 
         Show-ProgressUpdate "[+] yt-dlp installed ($($release.tag_name))" -Type "Success"
+        Set-Content -Path $script:VersionFilePath -Value $release.tag_name
         return $true
     } catch {
         Show-ProgressUpdate "[!] Failed to download yt-dlp: $($_.Exception.Message)" -Type "Error"
@@ -391,10 +398,23 @@ function Initialize-DigitalReaper {
 function Update-YtDlpSilent {
     try {
         $url = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
-        $response = Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = 'DigitalReaper' } -TimeoutSec 10 -ErrorAction SilentlyContinue
+
+        # Use Invoke-WebRequest so we can inspect the status code for rate-limit signals
+        $webResponse = Invoke-WebRequest -Uri $url -Headers @{ 'User-Agent' = 'DigitalReaper' } -TimeoutSec 10 -ErrorAction Stop
+        if ($webResponse.StatusCode -eq 403 -or $webResponse.StatusCode -eq 429) {
+            Show-ProgressUpdate "[!] GitHub API rate limit reached — skipping yt-dlp update check." -Type "Warning"
+            return
+        }
+        $response = $webResponse.Content | ConvertFrom-Json
         $latestVersion = $response.tag_name
-        
-        if ($latestVersion -and $latestVersion -ne $YTDLP_CURRENT_VERSION) {
+
+        # Read the currently installed version from file (fallback: empty string so we always update on first run)
+        $installedVersion = ""
+        if (Test-Path $script:VersionFilePath) {
+            $installedVersion = (Get-Content $script:VersionFilePath -Raw).Trim()
+        }
+
+        if ($latestVersion -and $latestVersion -ne $installedVersion) {
             $downloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/download/$latestVersion/yt-dlp.exe"
             $backupPath = "$script:YtDlpPath.backup"
             
@@ -423,6 +443,9 @@ function Update-YtDlpSilent {
 
             Set-HiddenAttribute -Path $script:YtDlpPath
 
+            # Persist the new version so we don't re-download it next run
+            Set-Content -Path $script:VersionFilePath -Value $latestVersion
+
             if (Test-Path $backupPath) {
                 Remove-Item $backupPath -Force -ErrorAction SilentlyContinue
             }
@@ -437,20 +460,6 @@ function Update-YtDlpSilent {
 # ===================================================================
 # --- URL SANITIZATION ---
 # ===================================================================
-
-function Get-SanitizedUrls {
-    param([array]$Urls)
-
-    $sanitizedUrls = @()
-    foreach ($url in $Urls) {
-        $clean = $url.Trim()
-        if (-not [string]::IsNullOrWhiteSpace($clean)) {
-            $sanitizedUrls += $clean
-        }
-    }
-
-    return $sanitizedUrls
-}
 
 # ===================================================================
 # --- YT-DLP ARGUMENT BUILDER & BATCH HELPERS ---
@@ -467,11 +476,11 @@ function Get-YtDlpArgs {
 
     # --- Anti-bot / stealth layer ---
     $userAgents = @(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
     )
     $randomUA = $userAgents[(Get-Random -Minimum 0 -Maximum $userAgents.Count)]
     $ytDlpArgs.Add("--user-agent")
@@ -487,6 +496,8 @@ function Get-YtDlpArgs {
 
     $ytDlpArgs.Add("--ffmpeg-location")
     $ytDlpArgs.Add($script:EngineDir)
+    $ytDlpArgs.Add("--socket-timeout")
+    $ytDlpArgs.Add("30")
     $ytDlpArgs.Add("--fragment-retries")
     $ytDlpArgs.Add("infinite")
     $ytDlpArgs.Add("--retry-sleep")
@@ -707,23 +718,60 @@ function Process-LinkFile {
         Write-Host ""
     }
 
-    $linesOut = New-Object System.Collections.Generic.List[string]
-    for ($i = 0; $i -lt $allLines.Count; $i++) {
-        $entryAtIndex = $linkEntries | Where-Object { $_.Index -eq $i } | Select-Object -First 1
-        if ($entryAtIndex) {
-            if (-not $entryAtIndex.WasSuccess) {
-                $linesOut.Add($allLines[$i])
-            }
-        } else {
-            $linesOut.Add($allLines[$i])
-        }
-    }
-
-    Set-Content -Path $FilePath -Value $linesOut.ToArray()
+    $successUrls = @($linkEntries | Where-Object { $_.WasSuccess } | ForEach-Object { $_.OriginalUrl })
+    Remove-SuccessfulLinks -FilePath $FilePath -SuccessUrls $successUrls
 
     return [pscustomobject]@{
         Success = $successCount
         Failure = $failureCount
+    }
+}
+
+# ===================================================================
+# --- SHARED DOWNLOAD HELPERS ---
+# ===================================================================
+
+function Remove-SuccessfulLinks {
+    param(
+        [string]$FilePath,
+        [string[]]$SuccessUrls
+    )
+    if (-not $FilePath -or -not (Test-Path $FilePath) -or -not $SuccessUrls -or $SuccessUrls.Count -eq 0) { return }
+    $allLines = @(Get-Content $FilePath)
+    $linesOut = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $allLines) {
+        if (Test-ValidUrl -Line $line) {
+            $cleanLine = Remove-InvisibleCharacters -Text $line
+            if ($SuccessUrls -notcontains $cleanLine) {
+                $linesOut.Add($line)
+            }
+        } else {
+            $linesOut.Add($line)
+        }
+    }
+    Set-Content -Path $FilePath -Value $linesOut.ToArray()
+}
+
+function Show-MissionSummary {
+    param(
+        [int]$SuccessCount,
+        [int]$FailureCount,
+        [string]$OutputDir,
+        [switch]$Silent
+    )
+    $speed = if ($Silent) { 0 } else { 30 }
+    Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Mission Summary ]---" -Color "Cyan" -Speed $speed
+    Write-Host "[+] Successful downloads: " -NoNewline -ForegroundColor "White"
+    Write-Pulse -Text "$SuccessCount" -Colors @("Green", "Cyan") -Cycles 1 -Speed 300
+    Write-Host "[!] Failed downloads:     " -NoNewline -ForegroundColor "White"
+    Write-Pulse -Text "$FailureCount" -Colors @("Red", "Yellow") -Cycles 1 -Speed 300
+    Write-Host "    Downloads saved to:   " -NoNewline -ForegroundColor "White"
+    Write-Host "$OutputDir" -ForegroundColor "Yellow"
+
+    if ($SuccessCount -gt 0) {
+        Show-CompletionBanner
+    } else {
+        Write-Pulse -Text "`n[!] DIGITAL REAPER: All downloads failed." -Colors @("Red", "DarkRed") -Cycles 3
     }
 }
 
@@ -756,33 +804,33 @@ function Run-BatchMode {
         [hashtable]$Settings
     )
 
-    $batchSuccess = 0
-    $batchFailure = 0
-
-    if (Test-Path $script:AudioLinksFile) {
-        $audioResult = Process-LinkFile -FilePath $script:AudioLinksFile -Settings $Settings -DownloadType "audio" -OutputDir $script:AudioOutputDir
-        $batchSuccess += $audioResult.Success
-        $batchFailure += $audioResult.Failure
+    # Lock file guard — prevent two instances from running simultaneously
+    if (Test-Path $script:LockFilePath) {
+        Show-ProgressUpdate "[!] Another instance of Digital Reaper is already running (lock file present). Exiting." -Type "Warning"
+        return
     }
+    try {
+        Set-Content -Path $script:LockFilePath -Value $PID
+        Set-HiddenAttribute -Path $script:LockFilePath
 
-    if (Test-Path $script:VideoLinksFile) {
-        $videoResult = Process-LinkFile -FilePath $script:VideoLinksFile -Settings $Settings -DownloadType "video" -OutputDir $script:VideoOutputDir
-        $batchSuccess += $videoResult.Success
-        $batchFailure += $videoResult.Failure
-    }
+        $batchSuccess = 0
+        $batchFailure = 0
 
-    Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Mission Summary ]---" -Color "Cyan" -Speed 30
-    Write-Host "[+] Successful downloads: " -NoNewline -ForegroundColor "White"
-    Write-Pulse -Text "$batchSuccess" -Colors @("Green", "Cyan") -Cycles 1 -Speed 300
-    Write-Host "[!] Failed downloads:     " -NoNewline -ForegroundColor "White"
-    Write-Pulse -Text "$batchFailure" -Colors @("Red", "Yellow") -Cycles 1 -Speed 300
-    Write-Host "    Downloads saved to:   " -NoNewline -ForegroundColor "White"
-    Write-Host "$script:DownloadsDir" -ForegroundColor "Yellow"
+        if (Test-Path $script:AudioLinksFile) {
+            $audioResult = Process-LinkFile -FilePath $script:AudioLinksFile -Settings $Settings -DownloadType "audio" -OutputDir $script:AudioOutputDir
+            $batchSuccess += $audioResult.Success
+            $batchFailure += $audioResult.Failure
+        }
 
-    if ($batchSuccess -gt 0) {
-        Show-CompletionBanner
-    } else {
-        Write-Pulse -Text "`n[!] DIGITAL REAPER: All downloads failed." -Colors @("Red", "DarkRed") -Cycles 3
+        if (Test-Path $script:VideoLinksFile) {
+            $videoResult = Process-LinkFile -FilePath $script:VideoLinksFile -Settings $Settings -DownloadType "video" -OutputDir $script:VideoOutputDir
+            $batchSuccess += $videoResult.Success
+            $batchFailure += $videoResult.Failure
+        }
+
+        Show-MissionSummary -SuccessCount $batchSuccess -FailureCount $batchFailure -OutputDir $script:DownloadsDir -Silent:$Silent
+    } finally {
+        Remove-Item $script:LockFilePath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -795,7 +843,7 @@ function Run-InteractiveMode {
     
     if ($urls.Count -eq 0) {
         Write-Pulse -Text "[!] No valid URLs found." -Colors @("Red", "DarkRed") -Cycles 2
-        Read-Host "Press Enter to exit..."
+        if (-not $Silent) { Read-Host "Press Enter to exit..." }
         exit 1
     }
     
@@ -860,35 +908,9 @@ function Run-InteractiveMode {
     }
 
     # Remove successfully downloaded links from the source file
-    if ($script:SourceFile -and (Test-Path $script:SourceFile) -and $successUrls.Count -gt 0) {
-        $allLines = @(Get-Content $script:SourceFile)
-        $linesOut = New-Object System.Collections.Generic.List[string]
-        foreach ($line in $allLines) {
-            if (Test-ValidUrl -Line $line) {
-                $cleanLine = Remove-InvisibleCharacters -Text $line
-                if ($successUrls -notcontains $cleanLine) {
-                    $linesOut.Add($line)
-                }
-            } else {
-                $linesOut.Add($line)
-            }
-        }
-        Set-Content -Path $script:SourceFile -Value $linesOut.ToArray()
-    }
+    Remove-SuccessfulLinks -FilePath $script:SourceFile -SuccessUrls $successUrls
 
-    Write-TypeWriter -Text "`n---[ DIGITAL REAPER - Mission Summary ]---" -Color "Cyan" -Speed 30
-    Write-Host "[+] Successful downloads: " -NoNewline -ForegroundColor "White"
-    Write-Pulse -Text "$successCount" -Colors @("Green", "Cyan") -Cycles 1 -Speed 300
-    Write-Host "[!] Failed downloads:     " -NoNewline -ForegroundColor "White"
-    Write-Pulse -Text "$failureCount" -Colors @("Red", "Yellow") -Cycles 1 -Speed 300
-    Write-Host "    Downloads saved to:   " -NoNewline -ForegroundColor "White"
-    Write-Host "$outputDir" -ForegroundColor "Yellow"
-
-    if ($successCount -gt 0) {
-        Show-CompletionBanner
-    } else {
-        Write-Pulse -Text "`n[!] DIGITAL REAPER: All downloads failed." -Colors @("Red", "DarkRed") -Cycles 3
-    }
+    Show-MissionSummary -SuccessCount $successCount -FailureCount $failureCount -OutputDir $outputDir -Silent:$Silent
 }
 
 # ===================================================================
@@ -901,7 +923,7 @@ try {
 
     if (-not (Initialize-DigitalReaper)) {
         Write-Pulse -Text "[!] DIGITAL REAPER initialization failed" -Colors @("Red", "DarkRed") -Cycles 3
-        Read-Host "Press Enter to exit..."
+        if (-not $Silent) { Read-Host "Press Enter to exit..." }
         exit 1
     }
 
@@ -923,5 +945,7 @@ try {
     Write-Host $_.ScriptStackTrace -ForegroundColor DarkRed
 }
 
-Write-Host -NoNewline "`n>> DIGITAL REAPER session complete. Press Enter to go dark..." -ForegroundColor "Yellow"
-Read-Host | Out-Null
+if (-not $Silent) {
+    Write-Host -NoNewline "`n>> DIGITAL REAPER session complete. Press Enter to go dark..." -ForegroundColor "Yellow"
+    Read-Host | Out-Null
+}

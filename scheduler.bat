@@ -97,8 +97,8 @@ if "%CHOICE%"=="1" (
     goto MENU
 )
 
-REM The scheduled task runs this same script with the /silent flag
-schtasks /create /tn "%TASK_NAME%" /tr "cmd.exe /c \"%~f0\" /silent" %SCHEDULE_ARGS% /ru %USERNAME% /rl HIGHEST /f >nul 2>&1
+REM Register the task to call PowerShell directly — avoids a CMD window flash on every run
+schtasks /create /tn "%TASK_NAME%" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%SCRIPT_DIR%digitalReaper.ps1\" -Silent" %SCHEDULE_ARGS% /ru %USERNAME% /rl HIGHEST /f >nul 2>&1
 
 if %errorlevel% equ 0 (
     echo.
@@ -163,7 +163,7 @@ REM  3 - RUN NOW  (also called silently by the scheduled task)
 REM ================================================================
 :RUN_NOW
 if /I "%1"=="/silent" (
-    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SCRIPT_DIR%digitalReaper.ps1"
+    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SCRIPT_DIR%digitalReaper.ps1" -Silent
     exit /b
 )
 echo.
