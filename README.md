@@ -92,8 +92,8 @@ If you run `digitalReaper.bat` with **no** `audioLinks.txt`/`videoLinks.txt` and
 1. Script starts in **one-click mode** by default
 2. Paste a URL and it starts with your default type/quality
 3. Optional commands at prompt:
-   - `SETTINGS` → quick settings page
-   - `FILE` → load URLs from a `.txt` file
+   - `settings` → quick settings page
+   - `file` → load URLs from a `.txt` file
 4. Downloads go to `downloads\` (or your custom `outputFolder`)
 5. After completion, choose:
    - Close terminal

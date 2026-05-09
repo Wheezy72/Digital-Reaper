@@ -42,7 +42,7 @@ $script:LockFilePath = Join-Path $script:EngineDir "reaper.lock"
 $script:VersionFilePath = Join-Path $script:EngineDir "version.txt"
 $script:DefaultOuterRetryCount = 3
 $script:TransientErrorPatterns = @(
-    "429",
+    "\b429\b",
     "Too Many Requests",
     "timed out",
     "timeout",
@@ -693,7 +693,7 @@ function Get-YtDlpArgs {
 function Test-TransientDownloadError {
     param([string]$ErrorText)
     foreach ($pattern in $script:TransientErrorPatterns) {
-        if ($ErrorText -match [regex]::Escape($pattern)) { return $true }
+        if ($ErrorText -match $pattern) { return $true }
     }
     return $false
 }
@@ -713,7 +713,7 @@ function Invoke-YtDlpForUrl {
         [string]$OutputDir,
         [string]$Url
     )
-    $maxAttempts = if ($Settings.outerRetryCount -and [int]$Settings.outerRetryCount -gt 0) { [int]$Settings.outerRetryCount } else { $script:DefaultOuterRetryCount }
+    $maxAttempts = if ([int]$Settings.outerRetryCount -gt 0) { [int]$Settings.outerRetryCount } else { $script:DefaultOuterRetryCount }
     $attempt = 0
     $lastErrorText = ""
     $baseArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir
@@ -1056,15 +1056,15 @@ function Run-InteractiveMode {
 
     $urls = @()
     $usedOneClick = $false
-    $hasExplicitInputFiles = -not [string]::IsNullOrWhiteSpace($script:LinksFile) -or -not [string]::IsNullOrWhiteSpace($script:ConfigFile)
+    $hasExplicitInputOrConfig = -not [string]::IsNullOrWhiteSpace($script:LinksFile) -or -not [string]::IsNullOrWhiteSpace($script:ConfigFile)
     $hasDefaultLinksFile = Test-Path $script:DefaultLinksFile
     $oneClickEnabled = $Settings.oneClickMode -or $ForceOneClick
-    $shouldUseOneClickMode = $oneClickEnabled -and -not $hasExplicitInputFiles -and -not $hasDefaultLinksFile
+    $shouldUseOneClickMode = $oneClickEnabled -and -not $hasExplicitInputOrConfig -and -not $hasDefaultLinksFile
     if ($shouldUseOneClickMode) {
         $usedOneClick = $true
         while ($urls.Count -eq 0) {
             Write-Host "Paste a link and press Enter." -ForegroundColor Yellow
-            Write-Host "Type settings for quick options or file to load a .txt list." -ForegroundColor DarkGray
+            Write-Host "Type ""settings"" for quick options or ""file"" to load a .txt list." -ForegroundColor DarkGray
             $quickInput = (Read-Host).Trim()
             if ([string]::IsNullOrWhiteSpace($quickInput)) {
                 Show-ProgressUpdate "[!] Please paste a link or command." -Type "Warning"
