@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 title DIGITAL REAPER - Scheduler
-color 0A
+color 07
 
 set "TASK_NAME=DigitalReaper"
 set "SCRIPT_DIR=%~dp0"
