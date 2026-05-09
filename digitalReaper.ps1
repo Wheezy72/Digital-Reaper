@@ -129,34 +129,33 @@ function Clear-StatusLine {
     Write-Host ("`r" + (" " * $width) + "`r") -NoNewline
 }
 
-function Get-YtDlpStatusText {
-    param([string]$Line)
-    if ([string]::IsNullOrWhiteSpace($Line)) { return "" }
-    if ($Line -match "^\[download\]\s+Destination:\s+(.+)$") {
-        return "Saving to " + (Split-Path -Leaf $matches[1])
+function Invoke-WithStatusDots {
+    param(
+        [string]$Status,
+        [scriptblock]$ScriptBlock,
+        [object[]]$ArgumentList = @()
+    )
+
+    $job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
+    $frames = @(".", "..", "...")
+    $frameIndex = 0
+
+    try {
+        while ($job.State -eq "Running") {
+            Write-StatusLine -Text ("{0}{1}" -f $Status, $frames[$frameIndex]) -Color "DarkGray"
+            $frameIndex = ($frameIndex + 1) % $frames.Count
+            Start-Sleep -Milliseconds 350
+        }
+
+        $output = Receive-Job -Job $job
+        if ($job.State -eq "Failed") {
+            throw ($job.ChildJobs[0].JobStateInfo.Reason)
+        }
+        return $output
+    } finally {
+        Clear-StatusLine
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
     }
-    if ($Line -match "^\[download\]\s+100%") {
-        return "Finalizing file"
-    }
-    if ($Line -match "^\[Merger\]") {
-        return "Merging audio and video"
-    }
-    if ($Line -match "^\[ExtractAudio\]") {
-        return "Extracting audio"
-    }
-    if ($Line -match "^\[download\]\s+Downloading item\s+(.+)$") {
-        return "Downloading item $($matches[1])"
-    }
-    if ($Line -match "^\[info\]\s+(.+):\s+Downloading\s+\d+\s+format") {
-        return "Preparing selected format"
-    }
-    if ($Line -match "^\[(youtube|generic|twitter|instagram|soundcloud|tiktok)\]") {
-        return "Reading media info"
-    }
-    if ($Line -match "^(ERROR|WARNING):\s+(.+)$") {
-        return $matches[2]
-    }
-    return ""
 }
 
 function Show-StartupSequence {
@@ -570,64 +569,75 @@ function Initialize-DigitalReaper {
 }
 
 function Update-YtDlpSilent {
-    try {
-        $url = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
+    $messages = Invoke-WithStatusDots -Status "Checking for yt-dlp updates" -ArgumentList @($script:VersionFilePath, $script:YtDlpPath) -ScriptBlock {
+        param(
+            [string]$VersionFilePath,
+            [string]$YtDlpPath
+        )
 
-        # Use Invoke-WebRequest so we can inspect the status code for rate-limit signals
-        $webResponse = Invoke-WebRequest -Uri $url -Headers @{ 'User-Agent' = 'DigitalReaper' } -TimeoutSec 10 -ErrorAction Stop
-        if ($webResponse.StatusCode -eq 403 -or $webResponse.StatusCode -eq 429) {
-            Show-ProgressUpdate "[!] GitHub API rate limit reached — skipping yt-dlp update check." -Type "Warning"
-            return
-        }
-        $response = $webResponse.Content | ConvertFrom-Json
-        $latestVersion = $response.tag_name
+        try {
+            $url = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
 
-        # Read the currently installed version from file (fallback: empty string so we always update on first run)
-        $installedVersion = ""
-        if (Test-Path $script:VersionFilePath) {
-            $installedVersion = (Get-Content $script:VersionFilePath -Raw).Trim()
-        }
+            # Use Invoke-WebRequest so we can inspect the status code for rate-limit signals
+            $webResponse = Invoke-WebRequest -Uri $url -Headers @{ 'User-Agent' = 'DigitalReaper' } -TimeoutSec 10 -ErrorAction Stop
+            if ($webResponse.StatusCode -eq 403 -or $webResponse.StatusCode -eq 429) {
+                return [pscustomobject]@{ Type = "Warning"; Message = "[!] GitHub API rate limit reached — skipping yt-dlp update check." }
+            }
+            $response = $webResponse.Content | ConvertFrom-Json
+            $latestVersion = $response.tag_name
 
-        if ($latestVersion -and $latestVersion -ne $installedVersion) {
-            $downloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/download/$latestVersion/yt-dlp.exe"
-            $backupPath = "$script:YtDlpPath.backup"
-            
-            if (Test-Path $script:YtDlpPath) {
-                Copy-Item $script:YtDlpPath $backupPath -Force
+            # Read the currently installed version from file (fallback: empty string so we always update on first run)
+            $installedVersion = ""
+            if (Test-Path $VersionFilePath) {
+                $installedVersion = (Get-Content $VersionFilePath -Raw).Trim()
             }
 
-            try {
-                Invoke-WebRequest -Uri $downloadUrl -OutFile $script:YtDlpPath -TimeoutSec 30 -ErrorAction Stop
-            } catch {
-                # Download failed — restore the backup so the tool keeps working
-                if (Test-Path $backupPath) {
-                    Copy-Item $backupPath $script:YtDlpPath -Force
+            if ($latestVersion -and $latestVersion -ne $installedVersion) {
+                $downloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/download/$latestVersion/yt-dlp.exe"
+                $backupPath = "$YtDlpPath.backup"
+
+                if (Test-Path $YtDlpPath) {
+                    Copy-Item $YtDlpPath $backupPath -Force
                 }
-                return
-            }
 
-            # Verify the downloaded file is non-empty before committing
-            $downloaded = Get-Item $script:YtDlpPath -ErrorAction SilentlyContinue
-            if (-not $downloaded -or $downloaded.Length -eq 0) {
-                if (Test-Path $backupPath) {
-                    Copy-Item $backupPath $script:YtDlpPath -Force
+                try {
+                    Invoke-WebRequest -Uri $downloadUrl -OutFile $YtDlpPath -TimeoutSec 30 -ErrorAction Stop
+                } catch {
+                    # Download failed — restore the backup so the tool keeps working
+                    if (Test-Path $backupPath) {
+                        Copy-Item $backupPath $YtDlpPath -Force
+                    }
+                    return
                 }
-                return
+
+                # Verify the downloaded file is non-empty before committing
+                $downloaded = Get-Item $YtDlpPath -ErrorAction SilentlyContinue
+                if (-not $downloaded -or $downloaded.Length -eq 0) {
+                    if (Test-Path $backupPath) {
+                        Copy-Item $backupPath $YtDlpPath -Force
+                    }
+                    return
+                }
+
+                # Persist the new version so we don't re-download it next run
+                Set-Content -Path $VersionFilePath -Value $latestVersion
+
+                if (Test-Path $backupPath) {
+                    Remove-Item $backupPath -Force -ErrorAction SilentlyContinue
+                }
+
+                return [pscustomobject]@{ Type = "Success"; Message = "yt-dlp updated to $latestVersion" }
             }
-
-            Set-HiddenAttribute -Path $script:YtDlpPath
-
-            # Persist the new version so we don't re-download it next run
-            Set-Content -Path $script:VersionFilePath -Value $latestVersion
-
-            if (Test-Path $backupPath) {
-                Remove-Item $backupPath -Force -ErrorAction SilentlyContinue
-            }
-
-            Show-ProgressUpdate "yt-dlp updated to $latestVersion" -Type "Success"
+        } catch {
+            # Silent fail for updates
         }
-    } catch {
-        # Silent fail for updates
+    }
+
+    Set-HiddenAttribute -Path $script:YtDlpPath
+    foreach ($message in @($messages)) {
+        if ($message -and $message.PSObject.Properties.Name -contains "Message") {
+            Show-ProgressUpdate $message.Message -Type $message.Type
+        }
     }
 }
 
@@ -682,7 +692,6 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--max-sleep-interval")
     $ytDlpArgs.Add("7")
     $ytDlpArgs.Add("--no-warnings")
-    $ytDlpArgs.Add("--no-progress")
     $ytDlpArgs.Add("--console-title")
     $ytDlpArgs.Add("--continue")
     $ytDlpArgs.Add("--concurrent-fragments")
@@ -809,75 +818,12 @@ function Invoke-YtDlpForUrl {
 
 function Invoke-YtDlpAndCapture {
     param([string[]]$YtDlpArgs)
-    $outputLines = New-Object System.Collections.Generic.List[string]
-
-    $argsJson = $YtDlpArgs | ConvertTo-Json -Compress
-    $job = Start-Job -ScriptBlock {
-        param(
-            [string]$ExePath,
-            [string]$ArgsJson
-        )
-        $runArgs = @($ArgsJson | ConvertFrom-Json)
-        & $ExePath @runArgs 2>&1 | ForEach-Object { "$_" }
-        [pscustomobject]@{
-            DigitalReaperExitCode = $LASTEXITCODE
-        }
-    } -ArgumentList $script:YtDlpPath, $argsJson
-
-    $frames = @(".", "..", "...")
-    $frameIndex = 0
-    $statusText = "Starting download"
-    $exitCode = 1
-
-    try {
-        while ($job.State -eq "Running") {
-            $newOutput = @(Receive-Job -Job $job)
-            foreach ($item in $newOutput) {
-                if ($item.PSObject.Properties.Name -contains "DigitalReaperExitCode") {
-                    $exitCode = [int]$item.DigitalReaperExitCode
-                    continue
-                }
-                $line = "$item"
-                $outputLines.Add($line) | Out-Null
-                $nextStatus = Get-YtDlpStatusText -Line $line
-                if ($nextStatus) {
-                    $statusText = $nextStatus
-                }
-            }
-
-            Write-StatusLine -Text ("Downloading{0} {1}" -f $frames[$frameIndex], $statusText) -Color "DarkGray"
-            $frameIndex = ($frameIndex + 1) % $frames.Count
-            Start-Sleep -Milliseconds 350
-        }
-
-        $remainingOutput = @(Receive-Job -Job $job)
-        foreach ($item in $remainingOutput) {
-            if ($item.PSObject.Properties.Name -contains "DigitalReaperExitCode") {
-                $exitCode = [int]$item.DigitalReaperExitCode
-                continue
-            }
-            $line = "$item"
-            $outputLines.Add($line) | Out-Null
-            $nextStatus = Get-YtDlpStatusText -Line $line
-            if ($nextStatus) {
-                $statusText = $nextStatus
-            }
-        }
-    } finally {
-        Clear-StatusLine
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
-    }
-
-    if ($exitCode -ne 0) {
-        $importantLines = @($outputLines | Where-Object { $_ -match "^(ERROR|WARNING):" } | Select-Object -Last 3)
-        foreach ($line in $importantLines) {
-            Write-Host $line -ForegroundColor Red
-        }
-    }
+    & $script:YtDlpPath @YtDlpArgs
+    $exitCode = $LASTEXITCODE
 
     return [pscustomobject]@{
         Success = ($exitCode -eq 0)
-        ErrorText = ($outputLines -join "`n")
+        ErrorText = ""
     }
 }
 
