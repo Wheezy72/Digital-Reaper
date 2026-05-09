@@ -152,6 +152,7 @@ Extra simple settings added for usability:
 - `maxRate` (e.g. `2M`)
 - `concurrentFragments` (recommended `1`)
 - `retryCount` (extractor retries)
+- `outerRetryCount` (per-URL retry attempts)
 
 ---
 

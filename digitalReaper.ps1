@@ -205,6 +205,7 @@ function Get-DefaultSettings {
         maxRate           = "2M"
         concurrentFragments = 1
         retryCount        = 8
+        outerRetryCount   = 3
     }
 }
 
@@ -250,7 +251,7 @@ function Save-Settings {
         foreach ($key in @(
             "videoQuality","audioFormat","useHEVC","downloadSubtitles","subtitleLanguages",
             "outputTemplate","autoUpdate","oneClickMode","defaultDownloadType","outputFolder",
-            "cookieSource","maxRate","concurrentFragments","retryCount"
+            "cookieSource","maxRate","concurrentFragments","retryCount","outerRetryCount"
         )) {
             if ($Settings.ContainsKey($key)) {
                 $ordered[$key] = $Settings[$key]
@@ -316,16 +317,20 @@ function Show-SimpleSettingsPage {
     }
 }
 
+function Get-BaseOutputDir {
+    param([hashtable]$Settings)
+    if ($Settings.outputFolder -and -not [string]::IsNullOrWhiteSpace($Settings.outputFolder)) {
+        return $Settings.outputFolder
+    }
+    return $script:DownloadsDir
+}
+
 function Get-OutputDirForType {
     param(
         [hashtable]$Settings,
         [string]$DownloadType
     )
-    $baseDir = if ($Settings.outputFolder -and -not [string]::IsNullOrWhiteSpace($Settings.outputFolder)) {
-        $Settings.outputFolder
-    } else {
-        $script:DownloadsDir
-    }
+    $baseDir = Get-BaseOutputDir -Settings $Settings
     return if ($DownloadType -eq "audio") {
         Join-Path $baseDir "audio"
     } else {
@@ -678,7 +683,7 @@ function Test-TransientDownloadError {
 function Get-FriendlyErrorHint {
     param([string]$ErrorText)
     if ($ErrorText -match "Private video") { return "This video is private. Only the owner can download it." }
-    if ($ErrorText -match "Sign in|age-restricted|confirm your age|login") { return "Login is needed for this video. Set the cookieSource setting to your browser." }
+    if ($ErrorText -match "Sign in|age-restricted|confirm your age|login") { return "Login is needed for this video. Set the cookieSource setting to match your browser." }
     if ($ErrorText -match "not available in your country|geo") { return "This video is region-restricted in your current location." }
     if ($ErrorText -match "429|Too Many Requests") { return "Too many requests right now. Wait a bit and try again." }
     if ($ErrorText -match "timed out|timeout|Connection reset") { return "Network issue detected. Please check your connection and retry." }
@@ -693,14 +698,14 @@ function Invoke-YtDlpForUrl {
         [string]$OutputDir,
         [string]$Url
     )
-    $maxAttempts = 3
+    $maxAttempts = if ($Settings.outerRetryCount -and [int]$Settings.outerRetryCount -gt 0) { [int]$Settings.outerRetryCount } else { 3 }
     $attempt = 0
     $lastErrorText = ""
     $baseArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir
 
     while ($attempt -lt $maxAttempts) {
         $attempt++
-        $attemptResult = Invoke-YtDlpAndCapture -Args (@($baseArgs) + $Url)
+        $attemptResult = Invoke-YtDlpAndCapture -Args ($baseArgs + $Url)
         $lastErrorText = $attemptResult.ErrorText
         if ($attemptResult.Success) {
             return [pscustomobject]@{ Success = $true; ErrorText = "" }
@@ -716,7 +721,7 @@ function Invoke-YtDlpForUrl {
     if ($DownloadType -eq "video") {
         Show-ProgressUpdate "[~] Trying fallback format for this video..." -Type "Update"
         $fallbackArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir -UseFallbackFormat
-        $fallbackResult = Invoke-YtDlpAndCapture -Args (@($fallbackArgs) + $Url)
+        $fallbackResult = Invoke-YtDlpAndCapture -Args ($fallbackArgs + $Url)
         $lastErrorText = $fallbackResult.ErrorText
         if ($fallbackResult.Success) {
             return [pscustomobject]@{ Success = $true; ErrorText = "" }
@@ -1021,7 +1026,7 @@ function Run-BatchMode {
             $batchFailure += $videoResult.Failure
         }
 
-        $summaryDir = if ($Settings.outputFolder -and -not [string]::IsNullOrWhiteSpace($Settings.outputFolder)) { $Settings.outputFolder } else { $script:DownloadsDir }
+        $summaryDir = Get-BaseOutputDir -Settings $Settings
         Show-MissionSummary -SuccessCount $batchSuccess -FailureCount $batchFailure -OutputDir $summaryDir -Silent:$Silent
     } finally {
         Remove-Item $script:LockFilePath -Force -ErrorAction SilentlyContinue
@@ -1039,8 +1044,8 @@ function Run-InteractiveMode {
     $hasExplicitInputFiles = -not [string]::IsNullOrWhiteSpace($script:LinksFile) -or -not [string]::IsNullOrWhiteSpace($script:ConfigFile)
     $hasDefaultLinksFile = Test-Path $script:DefaultLinksFile
     $oneClickEnabled = $Settings.oneClickMode -or $ForceOneClick
-    $canUseOneClick = $oneClickEnabled -and -not $hasExplicitInputFiles -and -not $hasDefaultLinksFile
-    if ($canUseOneClick) {
+    $shouldUseOneClickMode = $oneClickEnabled -and -not $hasExplicitInputFiles -and -not $hasDefaultLinksFile
+    if ($shouldUseOneClickMode) {
         $usedOneClick = $true
         while ($urls.Count -eq 0) {
             Write-Host "Paste a link and press Enter." -ForegroundColor Yellow
@@ -1050,12 +1055,12 @@ function Run-InteractiveMode {
                 Show-ProgressUpdate "[!] Please paste a link or command." -Type "Warning"
                 continue
             }
-            switch ($quickInput.ToLower()) {
-                "settings" {
+            switch ($quickInput) {
+                { $_ -ieq "settings" } {
                     Show-SimpleSettingsPage -Settings $Settings
                     continue
                 }
-                "file" {
+                { $_ -ieq "file" } {
                     $filePath = Read-Host "Enter path to URLs file (.txt)"
                     if ([string]::IsNullOrWhiteSpace($filePath)) {
                         Show-ProgressUpdate "[!] File path cannot be empty." -Type "Warning"

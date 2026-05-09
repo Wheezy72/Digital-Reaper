@@ -64,6 +64,9 @@ retryCount:
 - 8 = Recommended robust default
 - Increase if your network is unstable
 
+outerRetryCount:
+- 3 = How many times Digital Reaper retries a full URL before fallback/fail
+
 TIPS:
 - Restart Digital Reaper after changing settings
 - Keep backup of working settings.json
