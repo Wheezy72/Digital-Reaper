@@ -700,14 +700,9 @@ function Invoke-YtDlpForUrl {
 
     while ($attempt -lt $maxAttempts) {
         $attempt++
-        $result = New-Object System.Collections.Generic.List[string]
-        & $script:YtDlpPath (@($baseArgs) + $Url) 2>&1 | ForEach-Object {
-            $line = "$_"
-            $result.Add($line) | Out-Null
-            Write-Host $line
-        }
-        $lastErrorText = $result -join "`n"
-        if ($LASTEXITCODE -eq 0) {
+        $attemptResult = Invoke-YtDlpAndCapture -Args (@($baseArgs) + $Url)
+        $lastErrorText = $attemptResult.ErrorText
+        if ($attemptResult.Success) {
             return [pscustomobject]@{ Success = $true; ErrorText = "" }
         }
         if ($attempt -lt $maxAttempts -and (Test-TransientDownloadError -ErrorText $lastErrorText)) {
@@ -721,14 +716,9 @@ function Invoke-YtDlpForUrl {
     if ($DownloadType -eq "video") {
         Show-ProgressUpdate "[~] Trying fallback format for this video..." -Type "Update"
         $fallbackArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir -UseFallbackFormat
-        $fallbackResult = New-Object System.Collections.Generic.List[string]
-        & $script:YtDlpPath (@($fallbackArgs) + $Url) 2>&1 | ForEach-Object {
-            $line = "$_"
-            $fallbackResult.Add($line) | Out-Null
-            Write-Host $line
-        }
-        $lastErrorText = $fallbackResult -join "`n"
-        if ($LASTEXITCODE -eq 0) {
+        $fallbackResult = Invoke-YtDlpAndCapture -Args (@($fallbackArgs) + $Url)
+        $lastErrorText = $fallbackResult.ErrorText
+        if ($fallbackResult.Success) {
             return [pscustomobject]@{ Success = $true; ErrorText = "" }
         }
     }
@@ -736,6 +726,20 @@ function Invoke-YtDlpForUrl {
     return [pscustomobject]@{
         Success = $false
         ErrorText = $lastErrorText
+    }
+}
+
+function Invoke-YtDlpAndCapture {
+    param([string[]]$Args)
+    $outputLines = New-Object System.Collections.Generic.List[string]
+    & $script:YtDlpPath $Args 2>&1 | ForEach-Object {
+        $line = "$_"
+        $outputLines.Add($line) | Out-Null
+        Write-Host $line
+    }
+    return [pscustomobject]@{
+        Success = ($LASTEXITCODE -eq 0)
+        ErrorText = ($outputLines -join "`n")
     }
 }
 
@@ -1032,12 +1036,15 @@ function Run-InteractiveMode {
 
     $urls = @()
     $usedOneClick = $false
-    $canUseOneClick = ($Settings.oneClickMode -or $ForceOneClick) -and -not $script:LinksFile -and -not $script:ConfigFile -and -not (Test-Path $script:DefaultLinksFile)
+    $hasExplicitInputFiles = -not [string]::IsNullOrWhiteSpace($script:LinksFile) -or -not [string]::IsNullOrWhiteSpace($script:ConfigFile)
+    $hasDefaultLinksFile = Test-Path $script:DefaultLinksFile
+    $oneClickEnabled = $Settings.oneClickMode -or $ForceOneClick
+    $canUseOneClick = $oneClickEnabled -and -not $hasExplicitInputFiles -and -not $hasDefaultLinksFile
     if ($canUseOneClick) {
         $usedOneClick = $true
         while ($urls.Count -eq 0) {
             Write-Host "Paste a link and press Enter." -ForegroundColor Yellow
-            Write-Host "Type SETTINGS for quick options or FILE to load a .txt list." -ForegroundColor DarkGray
+            Write-Host "Type SETTINGS for quick options or FILE to load a .txt list (case-insensitive)." -ForegroundColor DarkGray
             $quickInput = (Read-Host).Trim()
             if ([string]::IsNullOrWhiteSpace($quickInput)) {
                 Show-ProgressUpdate "[!] Please paste a link or command." -Type "Warning"
@@ -1050,7 +1057,11 @@ function Run-InteractiveMode {
                 }
                 "file" {
                     $filePath = Read-Host "Enter path to URLs file (.txt)"
-                    if ([string]::IsNullOrWhiteSpace($filePath) -or -not (Test-Path $filePath)) {
+                    if ([string]::IsNullOrWhiteSpace($filePath)) {
+                        Show-ProgressUpdate "[!] File path cannot be empty." -Type "Warning"
+                        continue
+                    }
+                    if (-not (Test-Path $filePath)) {
                         Show-ProgressUpdate "[!] File not found." -Type "Warning"
                         continue
                     }
