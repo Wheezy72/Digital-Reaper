@@ -678,7 +678,7 @@ function Test-TransientDownloadError {
 function Get-FriendlyErrorHint {
     param([string]$ErrorText)
     if ($ErrorText -match "Private video") { return "This video is private. Only the owner can download it." }
-    if ($ErrorText -match "Sign in|age-restricted|confirm your age|login") { return "Login is needed for this video. Set cookieSource in settings to your browser." }
+    if ($ErrorText -match "Sign in|age-restricted|confirm your age|login") { return "Login is needed for this video. Set the cookieSource setting to your browser." }
     if ($ErrorText -match "not available in your country|geo") { return "This video is region-restricted in your current location." }
     if ($ErrorText -match "429|Too Many Requests") { return "Too many requests right now. Wait a bit and try again." }
     if ($ErrorText -match "timed out|timeout|Connection reset") { return "Network issue detected. Please check your connection and retry." }
@@ -1032,7 +1032,7 @@ function Run-InteractiveMode {
 
     $urls = @()
     $usedOneClick = $false
-    $canUseOneClick = ($Settings.oneClickMode -or $ForceOneClick) -and -not $LinksFile -and -not $ConfigFile -and -not (Test-Path $script:DefaultLinksFile)
+    $canUseOneClick = ($Settings.oneClickMode -or $ForceOneClick) -and -not $script:LinksFile -and -not $script:ConfigFile -and -not (Test-Path $script:DefaultLinksFile)
     if ($canUseOneClick) {
         $usedOneClick = $true
         while ($urls.Count -eq 0) {
@@ -1176,7 +1176,8 @@ try {
     }
 
     $nextMode = "auto"
-    while ($true) {
+    $shouldExit = $false
+    while (-not $shouldExit) {
         if ($nextMode -eq "quick") {
             Run-InteractiveMode -Settings $settings -ForceOneClick
         } elseif (Should-RunBatchMode) {
@@ -1189,7 +1190,7 @@ try {
 
         $postAction = Show-ExitPrompt
         switch ($postAction) {
-            "1" { break }
+            "1" { $shouldExit = $true }
             "2" { $nextMode = "auto" }
             "3" { $nextMode = "quick" }
         }
