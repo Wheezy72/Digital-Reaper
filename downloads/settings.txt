@@ -26,13 +26,43 @@ subtitleLanguages:
 - Add any language codes you want
 
 outputTemplate:
-- Current: "%(uploader)s/[%(upload_date)s] %(title)s [%(id)s].%(ext)s"
-- Creates: ChannelName/[20231201] Video Title [videoID].mp4
+- Current: "[%(upload_date)s] %(title)s [%(id)s].%(ext)s"
+- Creates: [20231201] Video Title [videoID].mp4
 - You can customize this pattern
 
 autoUpdate:
 - true  = Automatically update yt-dlp when available
 - false = Never update automatically
+
+oneClickMode:
+- true  = Paste link → download flow by default
+- false = Use normal interactive prompts
+
+defaultDownloadType:
+- "video" = One-click downloads video by default
+- "audio" = One-click downloads audio only by default
+
+outputFolder:
+- "" (empty) = Use default downloads folder in project
+- "D:\\Media" = Save to a custom base folder
+
+cookieSource:
+- "none"    = Don't use browser cookies
+- "chrome"  = Use signed-in Chrome session (user-authorized)
+- "edge"    = Use signed-in Edge session (user-authorized)
+- "firefox" = Use signed-in Firefox session (user-authorized)
+
+maxRate:
+- "2M" = Safer default rate (helps reduce throttling failures)
+- ""   = No explicit rate limit
+
+concurrentFragments:
+- 1 = Conservative/stable default
+- 2+ = Faster but can fail more often on some connections
+
+retryCount:
+- 8 = Recommended robust default
+- Increase if your network is unstable
 
 TIPS:
 - Restart Digital Reaper after changing settings

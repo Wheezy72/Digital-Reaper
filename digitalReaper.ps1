@@ -198,6 +198,13 @@ function Get-DefaultSettings {
         subtitleLanguages = @("en", "en-US")
         outputTemplate    = "[%(upload_date)s] %(title)s [%(id)s].%(ext)s"
         autoUpdate        = $true
+        oneClickMode      = $true
+        defaultDownloadType = "video"
+        outputFolder      = ""
+        cookieSource      = "none"
+        maxRate           = "2M"
+        concurrentFragments = 1
+        retryCount        = 8
     }
 }
 
@@ -234,6 +241,96 @@ function Load-Settings {
     }
     
     return $settings
+}
+
+function Save-Settings {
+    param([hashtable]$Settings)
+    try {
+        $ordered = [ordered]@{}
+        foreach ($key in @(
+            "videoQuality","audioFormat","useHEVC","downloadSubtitles","subtitleLanguages",
+            "outputTemplate","autoUpdate","oneClickMode","defaultDownloadType","outputFolder",
+            "cookieSource","maxRate","concurrentFragments","retryCount"
+        )) {
+            if ($Settings.ContainsKey($key)) {
+                $ordered[$key] = $Settings[$key]
+            }
+        }
+        $ordered | ConvertTo-Json -Depth 6 | Set-Content -Path $script:DefaultConfigFile
+        Show-ProgressUpdate "[+] Settings saved to settings.json" -Type "Success"
+    } catch {
+        Show-ProgressUpdate "[!] Failed to save settings: $($_.Exception.Message)" -Type "Warning"
+    }
+}
+
+function Show-SimpleSettingsPage {
+    param([hashtable]$Settings)
+    while ($true) {
+        Write-Host ""
+        Write-Host "=============== SIMPLE SETTINGS ===============" -ForegroundColor Cyan
+        Write-Host "1) Video quality        : $($Settings.videoQuality)" -ForegroundColor White
+        Write-Host "2) Output folder        : $(if ([string]::IsNullOrWhiteSpace($Settings.outputFolder)) { '[default downloads folder]' } else { $Settings.outputFolder })" -ForegroundColor White
+        Write-Host "3) Subtitles            : $($Settings.downloadSubtitles)" -ForegroundColor White
+        Write-Host "4) Cookie source        : $($Settings.cookieSource)" -ForegroundColor White
+        Write-Host "5) One-click mode       : $($Settings.oneClickMode)" -ForegroundColor White
+        Write-Host "6) Save and continue" -ForegroundColor Green
+        Write-Host "===============================================" -ForegroundColor Cyan
+        $choice = Read-Host "Choose (1-6)"
+        switch ($choice) {
+            "1" {
+                $quality = Read-Host "Set quality (720p/1080p/1440p/4K)"
+                if ($quality -in @("720p","1080p","1440p","4K")) {
+                    $Settings.videoQuality = $quality
+                } else {
+                    Show-ProgressUpdate "[!] Invalid quality. Keeping current value." -Type "Warning"
+                }
+            }
+            "2" {
+                $folder = Read-Host "Set output folder path (leave empty for default)"
+                $Settings.outputFolder = if ([string]::IsNullOrWhiteSpace($folder)) { "" } else { $folder.Trim() }
+            }
+            "3" {
+                $toggle = Read-Host "Download subtitles? (y/n)"
+                $Settings.downloadSubtitles = ($toggle -match "^(y|yes)$")
+            }
+            "4" {
+                $cookie = Read-Host "Cookie source (none/chrome/edge/firefox)"
+                if ($cookie -in @("none","chrome","edge","firefox")) {
+                    $Settings.cookieSource = $cookie
+                } else {
+                    Show-ProgressUpdate "[!] Invalid cookie source. Keeping current value." -Type "Warning"
+                }
+            }
+            "5" {
+                $toggle = Read-Host "Enable one-click mode? (y/n)"
+                $Settings.oneClickMode = ($toggle -match "^(y|yes)$")
+            }
+            "6" {
+                Save-Settings -Settings $Settings
+                return
+            }
+            default {
+                Show-ProgressUpdate "[!] Invalid choice." -Type "Warning"
+            }
+        }
+    }
+}
+
+function Get-OutputDirForType {
+    param(
+        [hashtable]$Settings,
+        [string]$DownloadType
+    )
+    $baseDir = if ($Settings.outputFolder -and -not [string]::IsNullOrWhiteSpace($Settings.outputFolder)) {
+        $Settings.outputFolder
+    } else {
+        $script:DownloadsDir
+    }
+    return if ($DownloadType -eq "audio") {
+        Join-Path $baseDir "audio"
+    } else {
+        Join-Path $baseDir "videos"
+    }
 }
 
 # ===================================================================
@@ -469,7 +566,8 @@ function Get-YtDlpArgs {
     param(
         [hashtable]$Settings,
         [string]$DownloadType,   # "audio" or "video"
-        [string]$OutputDir
+        [string]$OutputDir,
+        [switch]$UseFallbackFormat
     )
 
     $ytDlpArgs = New-Object System.Collections.Generic.List[string]
@@ -492,7 +590,7 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--sleep-requests")
     $ytDlpArgs.Add("2")
     $ytDlpArgs.Add("--extractor-retries")
-    $ytDlpArgs.Add("5")
+    $ytDlpArgs.Add([string]$Settings.retryCount)
 
     $ytDlpArgs.Add("--ffmpeg-location")
     $ytDlpArgs.Add($script:EngineDir)
@@ -509,6 +607,19 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--no-warnings")
     $ytDlpArgs.Add("--console-title")
     $ytDlpArgs.Add("--progress")
+    $ytDlpArgs.Add("--continue")
+    $ytDlpArgs.Add("--concurrent-fragments")
+    $ytDlpArgs.Add([string]$Settings.concurrentFragments)
+
+    if ($Settings.maxRate -and -not [string]::IsNullOrWhiteSpace($Settings.maxRate)) {
+        $ytDlpArgs.Add("--limit-rate")
+        $ytDlpArgs.Add($Settings.maxRate)
+    }
+
+    if ($Settings.cookieSource -and $Settings.cookieSource -ne "none") {
+        $ytDlpArgs.Add("--cookies-from-browser")
+        $ytDlpArgs.Add($Settings.cookieSource)
+    }
 
     if ($DownloadType -eq "video" -and $Settings.downloadSubtitles) {
         $ytDlpArgs.Add("--write-auto-sub")
@@ -536,7 +647,11 @@ function Get-YtDlpArgs {
             default { 1080 }
         }
 
-        $format = "($codecPreference" + "bestvideo[height<=$height])+bestaudio/best[height<=$height]"
+        $format = if ($UseFallbackFormat) {
+            "bestvideo+bestaudio/best"
+        } else {
+            "($codecPreference" + "bestvideo[height<=$height])+bestaudio/best[height<=$height]"
+        }
 
         $ytDlpArgs.Add("-f")
         $ytDlpArgs.Add($format)
@@ -549,6 +664,79 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add($outputTemplate)
 
     return $ytDlpArgs
+}
+
+function Test-TransientDownloadError {
+    param([string]$ErrorText)
+    $patterns = @("429", "Too Many Requests", "timed out", "timeout", "Connection reset", "temporarily unavailable", "HTTP Error 5")
+    foreach ($pattern in $patterns) {
+        if ($ErrorText -match [regex]::Escape($pattern)) { return $true }
+    }
+    return $false
+}
+
+function Get-FriendlyErrorHint {
+    param([string]$ErrorText)
+    if ($ErrorText -match "Private video") { return "This video is private. Only the owner can download it." }
+    if ($ErrorText -match "Sign in|age-restricted|confirm your age|login") { return "Login is needed for this video. Set cookieSource in settings to your browser." }
+    if ($ErrorText -match "not available in your country|geo") { return "This video is region-restricted in your current location." }
+    if ($ErrorText -match "429|Too Many Requests") { return "Too many requests right now. Wait a bit and try again." }
+    if ($ErrorText -match "timed out|timeout|Connection reset") { return "Network issue detected. Please check your connection and retry." }
+    if ($ErrorText -match "Video unavailable") { return "Video unavailable. It may have been removed or blocked." }
+    return "Download failed. Verify the link works in your browser and try again."
+}
+
+function Invoke-YtDlpForUrl {
+    param(
+        [hashtable]$Settings,
+        [string]$DownloadType,
+        [string]$OutputDir,
+        [string]$Url
+    )
+    $maxAttempts = 3
+    $attempt = 0
+    $lastErrorText = ""
+    $baseArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir
+
+    while ($attempt -lt $maxAttempts) {
+        $attempt++
+        $result = New-Object System.Collections.Generic.List[string]
+        & $script:YtDlpPath (@($baseArgs) + $Url) 2>&1 | ForEach-Object {
+            $line = "$_"
+            $result.Add($line) | Out-Null
+            Write-Host $line
+        }
+        $lastErrorText = $result -join "`n"
+        if ($LASTEXITCODE -eq 0) {
+            return [pscustomobject]@{ Success = $true; ErrorText = "" }
+        }
+        if ($attempt -lt $maxAttempts -and (Test-TransientDownloadError -ErrorText $lastErrorText)) {
+            Show-ProgressUpdate "[~] Temporary issue. Retrying in 3s ($attempt/$maxAttempts)..." -Type "Warning"
+            Start-Sleep -Seconds 3
+            continue
+        }
+        break
+    }
+
+    if ($DownloadType -eq "video") {
+        Show-ProgressUpdate "[~] Trying fallback format for this video..." -Type "Update"
+        $fallbackArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir -UseFallbackFormat
+        $fallbackResult = New-Object System.Collections.Generic.List[string]
+        & $script:YtDlpPath (@($fallbackArgs) + $Url) 2>&1 | ForEach-Object {
+            $line = "$_"
+            $fallbackResult.Add($line) | Out-Null
+            Write-Host $line
+        }
+        $lastErrorText = $fallbackResult -join "`n"
+        if ($LASTEXITCODE -eq 0) {
+            return [pscustomobject]@{ Success = $true; ErrorText = "" }
+        }
+    }
+
+    return [pscustomobject]@{
+        Success = $false
+        ErrorText = $lastErrorText
+    }
 }
 
 # ===================================================================
@@ -679,8 +867,6 @@ function Process-LinkFile {
         }
     }
 
-    $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir
-
     $quality = if ($DownloadType -eq "video") { $Settings.videoQuality } else { "" }
     Show-DownloadBanner -TypeLabel $DownloadType.ToUpper() -Mode "BATCH" -TargetCount $linkEntries.Count -OutputDir $OutputDir -Quality $quality
 
@@ -697,17 +883,15 @@ function Process-LinkFile {
             Write-Host " >> " -NoNewline -ForegroundColor DarkGray
             Write-Host $urlToUse -ForegroundColor White
             
-            $currentArgs = @($ytDlpArgs) + $urlToUse
-
-            & $script:YtDlpPath $currentArgs
-
-            if ($LASTEXITCODE -eq 0) {
+            $downloadResult = Invoke-YtDlpForUrl -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir -Url $urlToUse
+            if ($downloadResult.Success) {
                 $successCount++
                 $entry.WasSuccess = $true
                 Write-Host "  [ $targetNum/$($linkEntries.Count) ] " -NoNewline -ForegroundColor DarkGray
                 Write-Host "TARGET ACQUIRED" -ForegroundColor Green
             } else {
-                throw "yt-dlp exited with code $LASTEXITCODE"
+                $friendly = Get-FriendlyErrorHint -ErrorText $downloadResult.ErrorText
+                throw "$friendly"
             }
 
         } catch {
@@ -816,19 +1000,25 @@ function Run-BatchMode {
         $batchSuccess = 0
         $batchFailure = 0
 
+        $audioDir = Get-OutputDirForType -Settings $Settings -DownloadType "audio"
+        $videoDir = Get-OutputDirForType -Settings $Settings -DownloadType "video"
+        Ensure-Directory -Path $audioDir
+        Ensure-Directory -Path $videoDir
+
         if (Test-Path $script:AudioLinksFile) {
-            $audioResult = Process-LinkFile -FilePath $script:AudioLinksFile -Settings $Settings -DownloadType "audio" -OutputDir $script:AudioOutputDir
+            $audioResult = Process-LinkFile -FilePath $script:AudioLinksFile -Settings $Settings -DownloadType "audio" -OutputDir $audioDir
             $batchSuccess += $audioResult.Success
             $batchFailure += $audioResult.Failure
         }
 
         if (Test-Path $script:VideoLinksFile) {
-            $videoResult = Process-LinkFile -FilePath $script:VideoLinksFile -Settings $Settings -DownloadType "video" -OutputDir $script:VideoOutputDir
+            $videoResult = Process-LinkFile -FilePath $script:VideoLinksFile -Settings $Settings -DownloadType "video" -OutputDir $videoDir
             $batchSuccess += $videoResult.Success
             $batchFailure += $videoResult.Failure
         }
 
-        Show-MissionSummary -SuccessCount $batchSuccess -FailureCount $batchFailure -OutputDir $script:DownloadsDir -Silent:$Silent
+        $summaryDir = if ($Settings.outputFolder -and -not [string]::IsNullOrWhiteSpace($Settings.outputFolder)) { $Settings.outputFolder } else { $script:DownloadsDir }
+        Show-MissionSummary -SuccessCount $batchSuccess -FailureCount $batchFailure -OutputDir $summaryDir -Silent:$Silent
     } finally {
         Remove-Item $script:LockFilePath -Force -ErrorAction SilentlyContinue
     }
@@ -836,10 +1026,46 @@ function Run-BatchMode {
 
 function Run-InteractiveMode {
     param(
-        [hashtable]$Settings
+        [hashtable]$Settings,
+        [switch]$ForceOneClick
     )
 
-    $urls = Get-UrlsSmartMode
+    $urls = @()
+    $usedOneClick = $false
+    $canUseOneClick = ($Settings.oneClickMode -or $ForceOneClick) -and -not $LinksFile -and -not $ConfigFile -and -not (Test-Path $script:DefaultLinksFile)
+    if ($canUseOneClick) {
+        $usedOneClick = $true
+        while ($urls.Count -eq 0) {
+            Write-Host "Paste a link and press Enter." -ForegroundColor Yellow
+            Write-Host "Type SETTINGS for quick options or FILE to load a .txt list." -ForegroundColor DarkGray
+            $quickInput = (Read-Host).Trim()
+            if ([string]::IsNullOrWhiteSpace($quickInput)) {
+                Show-ProgressUpdate "[!] Please paste a link or command." -Type "Warning"
+                continue
+            }
+            switch ($quickInput.ToLower()) {
+                "settings" {
+                    Show-SimpleSettingsPage -Settings $Settings
+                    continue
+                }
+                "file" {
+                    $filePath = Read-Host "Enter path to URLs file (.txt)"
+                    if ([string]::IsNullOrWhiteSpace($filePath) -or -not (Test-Path $filePath)) {
+                        Show-ProgressUpdate "[!] File not found." -Type "Warning"
+                        continue
+                    }
+                    $script:SourceFile = $filePath
+                    $urls = Get-UrlsFromFile -FilePath $filePath
+                    continue
+                }
+                default {
+                    $urls = @($quickInput)
+                }
+            }
+        }
+    } else {
+        $urls = Get-UrlsSmartMode
+    }
     
     if ($urls.Count -eq 0) {
         Write-Pulse -Text "[!] No valid URLs found." -Colors @("Red", "DarkRed") -Cycles 2
@@ -850,25 +1076,30 @@ function Run-InteractiveMode {
     Show-ProgressUpdate "Loaded $($urls.Count) target(s) for processing" -Type "Success"
 
     # --- Ask user: audio or video ---
-    $downloadType = ""
-    while ($downloadType -notin @("1", "2")) {
-        Show-MenuOption -Prompt "Select Download Type" -Options "1=Video, 2=Audio Only"
-        $downloadType = Read-Host
-        if ($downloadType -notin @("1", "2")) {
-            Write-Pulse -Text "`n[!] Invalid choice. Enter 1 for Video or 2 for Audio." -Colors @("Red", "Yellow") -Cycles 2
+    $downloadType = if ($usedOneClick) {
+        if ($Settings.defaultDownloadType -eq "audio") { "2" } else { "1" }
+    } else {
+        ""
+    }
+    if (-not $usedOneClick) {
+        while ($downloadType -notin @("1", "2")) {
+            Show-MenuOption -Prompt "Select Download Type" -Options "1=Video, 2=Audio Only"
+            $downloadType = Read-Host
+            if ($downloadType -notin @("1", "2")) {
+                Write-Pulse -Text "`n[!] Invalid choice. Enter 1 for Video or 2 for Audio." -Colors @("Red", "Yellow") -Cycles 2
+            }
         }
     }
 
     if ($downloadType -eq "2") {
         $resolvedType = "audio"
-        $outputDir    = $script:AudioOutputDir
+        $outputDir    = Get-OutputDirForType -Settings $Settings -DownloadType "audio"
     } else {
         $resolvedType = "video"
-        $outputDir    = $script:VideoOutputDir
+        $outputDir    = Get-OutputDirForType -Settings $Settings -DownloadType "video"
     }
 
     Ensure-Directory -Path $outputDir
-    $ytDlpArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $resolvedType -OutputDir $outputDir
 
     $quality = if ($resolvedType -eq "video") { $Settings.videoQuality } else { "" }
     Show-DownloadBanner -TypeLabel $resolvedType.ToUpper() -Mode "EXFILTRATION" -TargetCount $urls.Count -OutputDir $outputDir -Quality $quality
@@ -886,17 +1117,15 @@ function Run-InteractiveMode {
             Write-Host " >> " -NoNewline -ForegroundColor DarkGray
             Write-Host $url -ForegroundColor White
 
-            $currentArgs = @($ytDlpArgs) + $url
-            
-            & $script:YtDlpPath $currentArgs
-            
-            if ($LASTEXITCODE -eq 0) {
+            $downloadResult = Invoke-YtDlpForUrl -Settings $Settings -DownloadType $resolvedType -OutputDir $outputDir -Url $url
+            if ($downloadResult.Success) {
                 $successCount++
                 $successUrls += $url
                 Write-Host "  [ $targetNum/$($urls.Count) ] " -NoNewline -ForegroundColor DarkGray
                 Write-Host "TARGET ACQUIRED" -ForegroundColor Green
             } else {
-                throw "yt-dlp exited with code $LASTEXITCODE"
+                $friendly = Get-FriendlyErrorHint -ErrorText $downloadResult.ErrorText
+                throw "$friendly"
             }
             
         } catch {
@@ -911,6 +1140,19 @@ function Run-InteractiveMode {
     Remove-SuccessfulLinks -FilePath $script:SourceFile -SuccessUrls $successUrls
 
     Show-MissionSummary -SuccessCount $successCount -FailureCount $failureCount -OutputDir $outputDir -Silent:$Silent
+}
+
+function Show-ExitPrompt {
+    while ($true) {
+        Write-Host ""
+        Write-Host "What do you want to do next?" -ForegroundColor Yellow
+        Write-Host "1) Close terminal" -ForegroundColor White
+        Write-Host "2) Return to DigitalReaper menu" -ForegroundColor White
+        Write-Host "3) Download another item" -ForegroundColor White
+        $choice = Read-Host "Choose (1-3)"
+        if ($choice -in @("1","2","3")) { return $choice }
+        Show-ProgressUpdate "[!] Invalid choice. Enter 1, 2, or 3." -Type "Warning"
+    }
 }
 
 # ===================================================================
@@ -933,10 +1175,24 @@ try {
         Update-YtDlpSilent
     }
 
-    if (Should-RunBatchMode) {
-        Run-BatchMode -Settings $settings
-    } else {
-        Run-InteractiveMode -Settings $settings
+    $nextMode = "auto"
+    while ($true) {
+        if ($nextMode -eq "quick") {
+            Run-InteractiveMode -Settings $settings -ForceOneClick
+        } elseif (Should-RunBatchMode) {
+            Run-BatchMode -Settings $settings
+        } else {
+            Run-InteractiveMode -Settings $settings
+        }
+
+        if ($Silent) { break }
+
+        $postAction = Show-ExitPrompt
+        switch ($postAction) {
+            "1" { break }
+            "2" { $nextMode = "auto" }
+            "3" { $nextMode = "quick" }
+        }
     }
 
 } catch {
@@ -946,6 +1202,5 @@ try {
 }
 
 if (-not $Silent) {
-    Write-Host -NoNewline "`n>> DIGITAL REAPER session complete. Press Enter to go dark..." -ForegroundColor "Yellow"
-    Read-Host | Out-Null
+    Write-Host "`n>> DIGITAL REAPER session ended." -ForegroundColor Yellow
 }
