@@ -720,7 +720,7 @@ function Invoke-YtDlpForUrl {
 
     while ($attempt -lt $maxAttempts) {
         $attempt++
-        $attemptResult = Invoke-YtDlpAndCapture -Args ($baseArgs + $Url)
+        $attemptResult = Invoke-YtDlpAndCapture -YtDlpArgs ($baseArgs + $Url)
         $lastErrorText = $attemptResult.ErrorText
         if ($attemptResult.Success) {
             return [pscustomobject]@{ Success = $true; ErrorText = "" }
@@ -736,7 +736,7 @@ function Invoke-YtDlpForUrl {
     if ($DownloadType -eq "video") {
         Show-ProgressUpdate "[~] Trying fallback format for this video..." -Type "Update"
         $fallbackArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir -UseFallbackFormat
-        $fallbackResult = Invoke-YtDlpAndCapture -Args ($fallbackArgs + $Url)
+        $fallbackResult = Invoke-YtDlpAndCapture -YtDlpArgs ($fallbackArgs + $Url)
         $lastErrorText = $fallbackResult.ErrorText
         if ($fallbackResult.Success) {
             return [pscustomobject]@{ Success = $true; ErrorText = "" }
@@ -750,9 +750,9 @@ function Invoke-YtDlpForUrl {
 }
 
 function Invoke-YtDlpAndCapture {
-    param([string[]]$Args)
+    param([string[]]$YtDlpArgs)
     $outputLines = New-Object System.Collections.Generic.List[string]
-    & $script:YtDlpPath $Args 2>&1 | ForEach-Object {
+    & $script:YtDlpPath @YtDlpArgs 2>&1 | ForEach-Object {
         $line = "$_"
         $outputLines.Add($line) | Out-Null
         Write-Host $line
@@ -1056,7 +1056,7 @@ function Run-InteractiveMode {
 
     $urls = @()
     $usedOneClick = $false
-    $hasExplicitInputOrConfig = -not [string]::IsNullOrWhiteSpace($script:LinksFile) -or -not [string]::IsNullOrWhiteSpace($script:ConfigFile)
+    $hasExplicitInputOrConfig = -not [string]::IsNullOrWhiteSpace($LinksFile) -or -not [string]::IsNullOrWhiteSpace($ConfigFile)
     $hasDefaultLinksFile = Test-Path $script:DefaultLinksFile
     $oneClickEnabled = $Settings.oneClickMode -or $ForceOneClick
     $shouldUseOneClickMode = $oneClickEnabled -and -not $hasExplicitInputOrConfig -and -not $hasDefaultLinksFile
