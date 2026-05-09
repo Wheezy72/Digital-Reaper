@@ -345,11 +345,10 @@ function Get-OutputDirForType {
         [string]$DownloadType
     )
     $baseDir = Get-BaseOutputDir -Settings $Settings
-    return if ($DownloadType -eq "audio") {
-        Join-Path $baseDir "audio"
-    } else {
-        Join-Path $baseDir "videos"
+    if ($DownloadType -eq "audio") {
+        return Join-Path $baseDir "audio"
     }
+    return Join-Path $baseDir "videos"
 }
 
 # ===================================================================
