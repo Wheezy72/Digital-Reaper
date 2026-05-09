@@ -673,7 +673,7 @@ function Get-YtDlpArgs {
 
 function Test-TransientDownloadError {
     param([string]$ErrorText)
-    $patterns = @("429", "Too Many Requests", "timed out", "timeout", "Connection reset", "temporarily unavailable", "HTTP Error 5")
+    $patterns = @("429", "Too Many Requests", "timed out", "timeout", "Connection reset", "temporarily unavailable", "HTTP Error 500", "HTTP Error 502", "HTTP Error 503")
     foreach ($pattern in $patterns) {
         if ($ErrorText -match [regex]::Escape($pattern)) { return $true }
     }
@@ -683,7 +683,7 @@ function Test-TransientDownloadError {
 function Get-FriendlyErrorHint {
     param([string]$ErrorText)
     if ($ErrorText -match "Private video") { return "This video is private. Only the owner can download it." }
-    if ($ErrorText -match "Sign in|age-restricted|confirm your age|login") { return "Login is needed for this video. Set the cookieSource setting to match your browser." }
+    if ($ErrorText -match "Sign in|age-restricted|confirm your age|login") { return "login is needed for this video. Set the cookieSource setting to match your browser." }
     if ($ErrorText -match "not available in your country|geo") { return "This video is region-restricted in your current location." }
     if ($ErrorText -match "429|Too Many Requests") { return "Too many requests right now. Wait a bit and try again." }
     if ($ErrorText -match "timed out|timeout|Connection reset") { return "Network issue detected. Please check your connection and retry." }
@@ -1049,7 +1049,7 @@ function Run-InteractiveMode {
         $usedOneClick = $true
         while ($urls.Count -eq 0) {
             Write-Host "Paste a link and press Enter." -ForegroundColor Yellow
-            Write-Host "Type SETTINGS for quick options or FILE to load a .txt list (case-insensitive)." -ForegroundColor DarkGray
+            Write-Host "Type SETTINGS (case-insensitive) for quick options or FILE to load a .txt list." -ForegroundColor DarkGray
             $quickInput = (Read-Host).Trim()
             if ([string]::IsNullOrWhiteSpace($quickInput)) {
                 Show-ProgressUpdate "[!] Please paste a link or command." -Type "Warning"
