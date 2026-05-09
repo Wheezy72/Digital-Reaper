@@ -19,6 +19,9 @@ Made by **Wheezy**
 - **🔒 Clean Directory** - Auto-hides technical files
 - **📊 Live Progress** - Real-time download speed and ETA displayed per file
 - **⏰ Task Scheduler** - Automate downloads on a set interval
+- **⚡ One-Click Flow** - Paste link and download with safe defaults
+- **🛡️ More Robust Downloads** - Resume support, retries, and fallback format
+- **🍪 Optional Browser Cookies** - User-authorized session support when needed
 
 ---
 
@@ -86,11 +89,16 @@ Digital Reaper will:
 
 If you run `digitalReaper.bat` with **no** `audioLinks.txt`/`videoLinks.txt` and **no** manifest or links file dropped:
 
-1. Script starts in interactive mode
-2. Choose:
-   - Manual single URL  
-   - Load URLs from a `.txt` file
-3. Downloads go to `downloads\` using `settings.json` defaults
+1. Script starts in **one-click mode** by default
+2. Paste a URL and it starts with your default type/quality
+3. Optional commands at prompt:
+   - `settings` → quick settings page
+   - `file` → load URLs from a `.txt` file
+4. Downloads go to `downloads\` (or your custom `outputFolder`)
+5. After completion, choose:
+   - Close terminal
+   - Return to menu
+   - Download another item
 
 ---
 
@@ -135,6 +143,16 @@ There are three main entry points:
 3. **Batch link files** – `audioLinks.txt` and `videoLinks.txt` in the root
 
 For a description of each setting, see `downloads/settings.txt`.
+
+Extra simple settings added for usability:
+- `oneClickMode` (true/false)
+- `defaultDownloadType` (`video` or `audio`)
+- `outputFolder` (blank = default `downloads`)
+- `cookieSource` (`none`, `chrome`, `edge`, `firefox`)
+- `maxRate` (e.g. `2M`)
+- `concurrentFragments` (recommended `1`)
+- `retryCount` (extractor retries)
+- `outerRetryCount` (per-URL retry attempts)
 
 ---
 
@@ -210,7 +228,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ### **Settings Not Loading:**
 - Verify `settings.json` has valid JSON syntax
-- Use `downloads/settings-guide.txt` for reference
+- Use `downloads/settings.txt` for reference
 - Delete `settings.json` to reset to defaults
 
 ### **Scheduled Task Fails:**
