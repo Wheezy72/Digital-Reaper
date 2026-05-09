@@ -66,10 +66,12 @@ $script:FriendlyErrorMap = @(
 # ===================================================================
 
 function Write-TypeWriter {
-    param([string]$Text, [string]$Color = "White", [int]$Speed = 30, [switch]$NoNewLine)
+    param([string]$Text, [string]$Color = "White", [int]$Speed = 0, [switch]$NoNewLine)
     foreach ($char in $Text.ToCharArray()) {
         Write-Host -NoNewline $char -ForegroundColor $Color
-        Start-Sleep -Milliseconds $Speed
+        if ($Speed -gt 0) {
+            Start-Sleep -Milliseconds $Speed
+        }
     }
     if (-not $NoNewLine) { Write-Host "" }
 }
@@ -99,6 +101,62 @@ function Show-ProgressUpdate {
         }
         Write-Host "[$timestamp] $Status" -ForegroundColor $color
     }
+}
+
+function Get-ConsoleWidth {
+    try {
+        return [Math]::Max(40, $Host.UI.RawUI.WindowSize.Width - 1)
+    } catch {
+        return 100
+    }
+}
+
+function Write-StatusLine {
+    param(
+        [string]$Text,
+        [string]$Color = "DarkGray"
+    )
+    $width = Get-ConsoleWidth
+    if ($Text.Length -gt $width) {
+        $Text = $Text.Substring(0, $width - 3) + "..."
+    }
+    $padding = " " * [Math]::Max(0, $width - $Text.Length)
+    Write-Host "`r$Text$padding" -NoNewline -ForegroundColor $Color
+}
+
+function Clear-StatusLine {
+    $width = Get-ConsoleWidth
+    Write-Host ("`r" + (" " * $width) + "`r") -NoNewline
+}
+
+function Get-YtDlpStatusText {
+    param([string]$Line)
+    if ([string]::IsNullOrWhiteSpace($Line)) { return "" }
+    if ($Line -match "^\[download\]\s+Destination:\s+(.+)$") {
+        return "Saving to " + (Split-Path -Leaf $matches[1])
+    }
+    if ($Line -match "^\[download\]\s+100%") {
+        return "Finalizing file"
+    }
+    if ($Line -match "^\[Merger\]") {
+        return "Merging audio and video"
+    }
+    if ($Line -match "^\[ExtractAudio\]") {
+        return "Extracting audio"
+    }
+    if ($Line -match "^\[download\]\s+Downloading item\s+(.+)$") {
+        return "Downloading item $($matches[1])"
+    }
+    if ($Line -match "^\[info\]\s+(.+):\s+Downloading\s+\d+\s+format") {
+        return "Preparing selected format"
+    }
+    if ($Line -match "^\[(youtube|generic|twitter|instagram|soundcloud|tiktok)\]") {
+        return "Reading media info"
+    }
+    if ($Line -match "^(ERROR|WARNING):\s+(.+)$") {
+        return $matches[2]
+    }
+    return ""
 }
 
 function Show-StartupSequence {
@@ -178,9 +236,10 @@ function Show-DownloadBanner {
         [string]$Quality = ""
     )
     Write-Host ""
-    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
-    Write-Host "  |  DIGITAL REAPER  >>  $TypeLabel $Mode" -ForegroundColor Red
-    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkGray
+    Write-Host "  |  DIGITAL REAPER  >>  " -NoNewline -ForegroundColor Gray
+    Write-Host "$TypeLabel $Mode" -ForegroundColor Cyan
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkGray
     Write-Host "  | Targets : " -NoNewline -ForegroundColor Gray
     Write-Host "$TargetCount" -ForegroundColor Cyan
     Write-Host "  | Output  : " -NoNewline -ForegroundColor Gray
@@ -189,7 +248,7 @@ function Show-DownloadBanner {
         Write-Host "  | Quality : " -NoNewline -ForegroundColor Gray
         Write-Host $Quality -ForegroundColor Magenta
     }
-    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkRed
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkGray
     Write-Host ""
 }
 
@@ -623,8 +682,8 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add("--max-sleep-interval")
     $ytDlpArgs.Add("7")
     $ytDlpArgs.Add("--no-warnings")
+    $ytDlpArgs.Add("--no-progress")
     $ytDlpArgs.Add("--console-title")
-    $ytDlpArgs.Add("--progress")
     $ytDlpArgs.Add("--continue")
     $ytDlpArgs.Add("--concurrent-fragments")
     $ytDlpArgs.Add([string]$Settings.concurrentFragments)
@@ -751,13 +810,73 @@ function Invoke-YtDlpForUrl {
 function Invoke-YtDlpAndCapture {
     param([string[]]$YtDlpArgs)
     $outputLines = New-Object System.Collections.Generic.List[string]
-    & $script:YtDlpPath @YtDlpArgs 2>&1 | ForEach-Object {
-        $line = "$_"
-        $outputLines.Add($line) | Out-Null
-        Write-Host $line
+
+    $argsJson = $YtDlpArgs | ConvertTo-Json -Compress
+    $job = Start-Job -ScriptBlock {
+        param(
+            [string]$ExePath,
+            [string]$ArgsJson
+        )
+        $runArgs = @($ArgsJson | ConvertFrom-Json)
+        & $ExePath @runArgs 2>&1 | ForEach-Object { "$_" }
+        [pscustomobject]@{
+            DigitalReaperExitCode = $LASTEXITCODE
+        }
+    } -ArgumentList $script:YtDlpPath, $argsJson
+
+    $frames = @(".", "..", "...")
+    $frameIndex = 0
+    $statusText = "Starting download"
+    $exitCode = 1
+
+    try {
+        while ($job.State -eq "Running") {
+            $newOutput = @(Receive-Job -Job $job)
+            foreach ($item in $newOutput) {
+                if ($item.PSObject.Properties.Name -contains "DigitalReaperExitCode") {
+                    $exitCode = [int]$item.DigitalReaperExitCode
+                    continue
+                }
+                $line = "$item"
+                $outputLines.Add($line) | Out-Null
+                $nextStatus = Get-YtDlpStatusText -Line $line
+                if ($nextStatus) {
+                    $statusText = $nextStatus
+                }
+            }
+
+            Write-StatusLine -Text ("Downloading{0} {1}" -f $frames[$frameIndex], $statusText) -Color "DarkGray"
+            $frameIndex = ($frameIndex + 1) % $frames.Count
+            Start-Sleep -Milliseconds 350
+        }
+
+        $remainingOutput = @(Receive-Job -Job $job)
+        foreach ($item in $remainingOutput) {
+            if ($item.PSObject.Properties.Name -contains "DigitalReaperExitCode") {
+                $exitCode = [int]$item.DigitalReaperExitCode
+                continue
+            }
+            $line = "$item"
+            $outputLines.Add($line) | Out-Null
+            $nextStatus = Get-YtDlpStatusText -Line $line
+            if ($nextStatus) {
+                $statusText = $nextStatus
+            }
+        }
+    } finally {
+        Clear-StatusLine
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
     }
+
+    if ($exitCode -ne 0) {
+        $importantLines = @($outputLines | Where-Object { $_ -match "^(ERROR|WARNING):" } | Select-Object -Last 3)
+        foreach ($line in $importantLines) {
+            Write-Host $line -ForegroundColor Red
+        }
+    }
+
     return [pscustomobject]@{
-        Success = ($LASTEXITCODE -eq 0)
+        Success = ($exitCode -eq 0)
         ErrorText = ($outputLines -join "`n")
     }
 }
@@ -812,7 +931,8 @@ function Get-UrlsSmartMode {
         return Get-UrlsFromFile -FilePath $script:DefaultLinksFile
     }
     
-    Write-TypeWriter -Text "`n--- Select Input Method ---" -Color "Cyan" -Speed 30
+    Write-Host ""
+    Write-Host "--- Select Input Method ---" -ForegroundColor Cyan
     $inputMethod = ""
     while ($inputMethod -notin @("1", "2")) {
         Show-MenuOption -Prompt "Select Input Method" -Options "1=Manual URL, 2=Load from File"
@@ -1062,8 +1182,8 @@ function Run-InteractiveMode {
     if ($shouldUseOneClickMode) {
         $usedOneClick = $true
         while ($urls.Count -eq 0) {
-            Write-Host "Paste a link and press Enter." -ForegroundColor Yellow
-            Write-Host "Type ""settings"" for quick options or ""file"" to load a .txt list." -ForegroundColor DarkGray
+            Write-Host "Paste a YouTube/media link and press Enter." -ForegroundColor Yellow
+            Write-Host "Type ""file"" to choose a .txt link file, or ""settings"" for quick options." -ForegroundColor DarkGray
             $quickInput = (Read-Host).Trim()
             if ([string]::IsNullOrWhiteSpace($quickInput)) {
                 Show-ProgressUpdate "[!] Please paste a link or command." -Type "Warning"

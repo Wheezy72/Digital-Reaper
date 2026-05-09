@@ -1,6 +1,6 @@
 @echo off
 title DIGITAL REAPER - YouTube Harvester
-color 0A
+color 07
 
 echo ===============================================
 echo        DIGITAL REAPER - INITIALIZING
