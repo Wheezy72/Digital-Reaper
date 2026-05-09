@@ -40,6 +40,26 @@ $script:LockFilePath = Join-Path $script:EngineDir "reaper.lock"
 
 # Version file — persists the installed yt-dlp version across runs
 $script:VersionFilePath = Join-Path $script:EngineDir "version.txt"
+$script:DefaultOuterRetryCount = 3
+$script:TransientErrorPatterns = @(
+    "429",
+    "Too Many Requests",
+    "timed out",
+    "timeout",
+    "Connection reset",
+    "temporarily unavailable",
+    "HTTP Error 500",
+    "HTTP Error 502",
+    "HTTP Error 503"
+)
+$script:FriendlyErrorMap = @(
+    [pscustomobject]@{ Pattern = "Private video"; Message = "This video is private. Only the owner can download it." },
+    [pscustomobject]@{ Pattern = "Sign in|age-restricted|confirm your age|login"; Message = "Login is needed for this video. Set the cookieSource setting to match your browser." },
+    [pscustomobject]@{ Pattern = "not available in your country|geo"; Message = "This video is region-restricted in your current location." },
+    [pscustomobject]@{ Pattern = "429|Too Many Requests"; Message = "Too many requests right now. Wait a bit and try again." },
+    [pscustomobject]@{ Pattern = "timed out|timeout|Connection reset"; Message = "Network issue detected. Please check your connection and retry." },
+    [pscustomobject]@{ Pattern = "Video unavailable"; Message = "Video unavailable. It may have been removed or blocked." }
+)
 
 # ===================================================================
 # --- ENHANCED AESTHETIC FUNCTIONS ---
@@ -205,7 +225,7 @@ function Get-DefaultSettings {
         maxRate           = "2M"
         concurrentFragments = 1
         retryCount        = 8
-        outerRetryCount   = 3
+        outerRetryCount   = $script:DefaultOuterRetryCount
     }
 }
 
@@ -248,14 +268,8 @@ function Save-Settings {
     param([hashtable]$Settings)
     try {
         $ordered = [ordered]@{}
-        foreach ($key in @(
-            "videoQuality","audioFormat","useHEVC","downloadSubtitles","subtitleLanguages",
-            "outputTemplate","autoUpdate","oneClickMode","defaultDownloadType","outputFolder",
-            "cookieSource","maxRate","concurrentFragments","retryCount","outerRetryCount"
-        )) {
-            if ($Settings.ContainsKey($key)) {
-                $ordered[$key] = $Settings[$key]
-            }
+        foreach ($key in ($Settings.Keys | Sort-Object)) {
+            $ordered[$key] = $Settings[$key]
         }
         $ordered | ConvertTo-Json -Depth 6 | Set-Content -Path $script:DefaultConfigFile
         Show-ProgressUpdate "[+] Settings saved to settings.json" -Type "Success"
@@ -678,8 +692,7 @@ function Get-YtDlpArgs {
 
 function Test-TransientDownloadError {
     param([string]$ErrorText)
-    $patterns = @("429", "Too Many Requests", "timed out", "timeout", "Connection reset", "temporarily unavailable", "HTTP Error 500", "HTTP Error 502", "HTTP Error 503")
-    foreach ($pattern in $patterns) {
+    foreach ($pattern in $script:TransientErrorPatterns) {
         if ($ErrorText -match [regex]::Escape($pattern)) { return $true }
     }
     return $false
@@ -687,12 +700,9 @@ function Test-TransientDownloadError {
 
 function Get-FriendlyErrorHint {
     param([string]$ErrorText)
-    if ($ErrorText -match "Private video") { return "This video is private. Only the owner can download it." }
-    if ($ErrorText -match "Sign in|age-restricted|confirm your age|login") { return "Login is needed for this video. Set the cookieSource setting to match your browser." }
-    if ($ErrorText -match "not available in your country|geo") { return "This video is region-restricted in your current location." }
-    if ($ErrorText -match "429|Too Many Requests") { return "Too many requests right now. Wait a bit and try again." }
-    if ($ErrorText -match "timed out|timeout|Connection reset") { return "Network issue detected. Please check your connection and retry." }
-    if ($ErrorText -match "Video unavailable") { return "Video unavailable. It may have been removed or blocked." }
+    foreach ($entry in $script:FriendlyErrorMap) {
+        if ($ErrorText -match $entry.Pattern) { return $entry.Message }
+    }
     return "Download failed. Verify the link works in your browser and try again."
 }
 
@@ -703,7 +713,7 @@ function Invoke-YtDlpForUrl {
         [string]$OutputDir,
         [string]$Url
     )
-    $maxAttempts = if ($Settings.outerRetryCount -and [int]$Settings.outerRetryCount -gt 0) { [int]$Settings.outerRetryCount } else { 3 }
+    $maxAttempts = if ($Settings.outerRetryCount -and [int]$Settings.outerRetryCount -gt 0) { [int]$Settings.outerRetryCount } else { $script:DefaultOuterRetryCount }
     $attempt = 0
     $lastErrorText = ""
     $baseArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir
@@ -1061,11 +1071,11 @@ function Run-InteractiveMode {
                 continue
             }
             switch ($quickInput) {
-                { $_ -ieq "settings" } {
+                "settings" {
                     Show-SimpleSettingsPage -Settings $Settings
                     continue
                 }
-                { $_ -ieq "file" } {
+                "file" {
                     $filePath = Read-Host "Enter path to URLs file (.txt)"
                     if ([string]::IsNullOrWhiteSpace($filePath)) {
                         Show-ProgressUpdate "[!] File path cannot be empty." -Type "Warning"
