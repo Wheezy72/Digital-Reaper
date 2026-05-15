@@ -19,7 +19,15 @@ param(
 
 $script:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:EngineDir   = Join-Path $script:ScriptDir "engine"
-$script:IsWindowsPlatform = if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { ($env:OS -eq "Windows_NT") }
+$script:IsWindowsPlatform = if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) {
+    [bool]$IsWindows
+} else {
+    try {
+        [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+    } catch {
+        ($PSVersionTable.PSEdition -eq "Desktop") -or ($env:OS -eq "Windows_NT")
+    }
+}
 $script:YtDlpAssetName = if ($script:IsWindowsPlatform) { "yt-dlp.exe" } else { "yt-dlp_linux" }
 $script:YtDlpBinaryName = if ($script:IsWindowsPlatform) { "yt-dlp.exe" } else { "yt-dlp" }
 $script:FfmpegBinaryName = if ($script:IsWindowsPlatform) { "ffmpeg.exe" } else { "ffmpeg" }
@@ -437,6 +445,24 @@ function Set-HiddenAttribute {
     }
 }
 
+function Set-ExecutablePermission {
+    param([string]$Path)
+    if ($script:IsWindowsPlatform) {
+        return $true
+    }
+
+    try {
+        & chmod +x $Path
+        if ($LASTEXITCODE -ne 0) {
+            throw "chmod returned exit code $LASTEXITCODE"
+        }
+        return $true
+    } catch {
+        Show-ProgressUpdate "[!] Failed to mark file executable: $Path ($($_.Exception.Message))" -Type "Error"
+        return $false
+    }
+}
+
 function Install-YtDlp {
     Show-ProgressUpdate "[~] yt-dlp not found — downloading latest release..." -Type "Update"
     try {
@@ -446,8 +472,8 @@ function Install-YtDlp {
         if (-not $asset) { throw "$($script:YtDlpAssetName) asset not found in latest release." }
 
         Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $script:YtDlpPath -TimeoutSec 120 -ErrorAction Stop
-        if (-not $script:IsWindowsPlatform) {
-            & chmod +x $script:YtDlpPath
+        if (-not (Set-ExecutablePermission -Path $script:YtDlpPath)) {
+            throw "Could not set executable permission on yt-dlp."
         }
 
         $downloaded = Get-Item $script:YtDlpPath -ErrorAction SilentlyContinue
@@ -468,7 +494,7 @@ function Install-Ffmpeg {
         $systemFfmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
         $systemFfprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
         if (-not $systemFfmpeg -or -not $systemFfprobe) {
-            Show-ProgressUpdate "[!] ffmpeg/ffprobe not found. Install with: Ubuntu/Debian='sudo apt install ffmpeg' | Fedora='sudo dnf install ffmpeg' | Arch='sudo pacman -S ffmpeg'" -Type "Error"
+            Show-ProgressUpdate "[!] ffmpeg/ffprobe not found. Install with: Ubuntu/Debian=sudo apt install ffmpeg | Fedora=sudo dnf install ffmpeg | Arch=sudo pacman -S ffmpeg" -Type "Error"
             return $false
         }
 
@@ -652,6 +678,9 @@ function Update-YtDlpSilent {
                     Invoke-WebRequest -Uri $downloadUrl -OutFile $YtDlpPath -TimeoutSec 30 -ErrorAction Stop
                     if (-not $IsWindowsPlatform) {
                         & chmod +x $YtDlpPath
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "chmod returned exit code $LASTEXITCODE"
+                        }
                     }
                 } catch {
                     # Download failed — restore the backup so the tool keeps working
