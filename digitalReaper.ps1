@@ -495,9 +495,9 @@ function Install-Ffmpeg {
         $systemFfprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
         if (-not $systemFfmpeg -or -not $systemFfprobe) {
             Show-ProgressUpdate "[!] ffmpeg/ffprobe not found. Install using your package manager:" -Type "Error"
-            Show-ProgressUpdate "    Ubuntu/Debian: sudo apt install ffmpeg" -Type "Error"
-            Show-ProgressUpdate "    Fedora:        sudo dnf install ffmpeg" -Type "Error"
-            Show-ProgressUpdate "    Arch:          sudo pacman -S ffmpeg" -Type "Error"
+            Show-ProgressUpdate "    Ubuntu/Debian: sudo apt install ffmpeg" -Type "Warning"
+            Show-ProgressUpdate "    Fedora:        sudo dnf install ffmpeg" -Type "Warning"
+            Show-ProgressUpdate "    Arch:          sudo pacman -S ffmpeg" -Type "Warning"
             return $false
         }
 

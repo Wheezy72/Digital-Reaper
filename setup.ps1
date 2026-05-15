@@ -29,9 +29,9 @@ if ($Silent) {
 & $hostExe @setupArgs
 $exitCode = $LASTEXITCODE
 if ($exitCode -ne 0) {
-    Write-Error "Digital Reaper setup failed with exit code $exitCode."
+    Write-Error "DIGITAL REAPER setup failed with exit code $exitCode."
     exit $exitCode
 }
 
-Write-Host "[+] Digital Reaper setup completed successfully." -ForegroundColor Green
+Write-Host "[+] DIGITAL REAPER setup completed successfully." -ForegroundColor Green
 exit 0
