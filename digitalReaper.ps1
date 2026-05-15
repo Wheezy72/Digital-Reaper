@@ -9,7 +9,8 @@
 param(
     [string]$LinksFile  = "",
     [string]$ConfigFile = "",
-    [switch]$Silent
+    [switch]$Silent,
+    [switch]$SetupOnly
 )
 
 # ===================================================================
@@ -18,9 +19,15 @@ param(
 
 $script:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:EngineDir   = Join-Path $script:ScriptDir "engine"
-$script:YtDlpPath   = Join-Path $script:EngineDir "yt-dlp.exe"
-$script:FfmpegPath  = Join-Path $script:EngineDir "ffmpeg.exe"
-$script:FfprobePath = Join-Path $script:EngineDir "ffprobe.exe"
+$script:IsWindowsPlatform = ($env:OS -eq "Windows_NT")
+$script:YtDlpAssetName = if ($script:IsWindowsPlatform) { "yt-dlp.exe" } else { "yt-dlp_linux" }
+$script:YtDlpBinaryName = if ($script:IsWindowsPlatform) { "yt-dlp.exe" } else { "yt-dlp" }
+$script:FfmpegBinaryName = if ($script:IsWindowsPlatform) { "ffmpeg.exe" } else { "ffmpeg" }
+$script:FfprobeBinaryName = if ($script:IsWindowsPlatform) { "ffprobe.exe" } else { "ffprobe" }
+$script:YtDlpPath   = Join-Path $script:EngineDir $script:YtDlpBinaryName
+$script:FfmpegPath  = Join-Path $script:EngineDir $script:FfmpegBinaryName
+$script:FfprobePath = Join-Path $script:EngineDir $script:FfprobeBinaryName
+$script:FfmpegLocation = $script:EngineDir
 
 $script:DownloadsDir      = Join-Path $script:ScriptDir "downloads"
 $script:DefaultLinksFile  = Join-Path $script:ScriptDir "links.txt"
@@ -415,6 +422,9 @@ function Get-OutputDirForType {
 
 function Set-HiddenAttribute {
     param ([string]$Path)
+    if (-not $script:IsWindowsPlatform) {
+        return
+    }
     try {
         if (Test-Path $Path) {
             $item = Get-Item $Path -Force
@@ -432,10 +442,13 @@ function Install-YtDlp {
     try {
         $apiUrl  = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
         $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'DigitalReaper' } -TimeoutSec 15 -ErrorAction Stop
-        $asset   = $release.assets | Where-Object { $_.name -eq "yt-dlp.exe" } | Select-Object -First 1
-        if (-not $asset) { throw "yt-dlp.exe asset not found in latest release." }
+        $asset   = $release.assets | Where-Object { $_.name -eq $script:YtDlpAssetName } | Select-Object -First 1
+        if (-not $asset) { throw "$($script:YtDlpAssetName) asset not found in latest release." }
 
         Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $script:YtDlpPath -TimeoutSec 120 -ErrorAction Stop
+        if (-not $script:IsWindowsPlatform) {
+            & chmod +x $script:YtDlpPath
+        }
 
         $downloaded = Get-Item $script:YtDlpPath -ErrorAction SilentlyContinue
         if (-not $downloaded -or $downloaded.Length -eq 0) { throw "Downloaded file is empty." }
@@ -450,6 +463,34 @@ function Install-YtDlp {
 }
 
 function Install-Ffmpeg {
+    if (-not $script:IsWindowsPlatform) {
+        Show-ProgressUpdate "[~] Linux detected — using system ffmpeg/ffprobe..." -Type "Update"
+        $systemFfmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+        $systemFfprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
+        if (-not $systemFfmpeg -or -not $systemFfprobe) {
+            Show-ProgressUpdate "[!] ffmpeg and ffprobe were not found. Install them with your package manager, then re-run setup." -Type "Error"
+            return $false
+        }
+
+        $script:FfmpegPath = $systemFfmpeg.Source
+        $script:FfprobePath = $systemFfprobe.Source
+        $script:FfmpegLocation = Split-Path -Parent $systemFfmpeg.Source
+
+        $null = & $script:FfmpegPath -version 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Show-ProgressUpdate "[!] ffmpeg failed functional verification (exit code $LASTEXITCODE)." -Type "Error"
+            return $false
+        }
+        $null = & $script:FfprobePath -version 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Show-ProgressUpdate "[!] ffprobe failed functional verification (exit code $LASTEXITCODE)." -Type "Error"
+            return $false
+        }
+
+        Show-ProgressUpdate "[+] Using system ffmpeg and ffprobe" -Type "Success"
+        return $true
+    }
+
     Show-ProgressUpdate "[~] ffmpeg not found — downloading static build (this may take a minute)..." -Type "Update"
     # Use the static (non-shared) GPL build so ffmpeg.exe and ffprobe.exe are
     # self-contained executables with no companion DLLs required.
@@ -569,10 +610,12 @@ function Initialize-DigitalReaper {
 }
 
 function Update-YtDlpSilent {
-    $messages = Invoke-WithStatusDots -Status "Checking for yt-dlp updates" -ArgumentList @($script:VersionFilePath, $script:YtDlpPath) -ScriptBlock {
+    $messages = Invoke-WithStatusDots -Status "Checking for yt-dlp updates" -ArgumentList @($script:VersionFilePath, $script:YtDlpPath, $script:YtDlpAssetName, $script:IsWindowsPlatform) -ScriptBlock {
         param(
             [string]$VersionFilePath,
-            [string]$YtDlpPath
+            [string]$YtDlpPath,
+            [string]$YtDlpAssetName,
+            [bool]$IsWindowsPlatform
         )
 
         try {
@@ -593,7 +636,7 @@ function Update-YtDlpSilent {
             }
 
             if ($latestVersion -and $latestVersion -ne $installedVersion) {
-                $downloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/download/$latestVersion/yt-dlp.exe"
+                $downloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/download/$latestVersion/$YtDlpAssetName"
                 $backupPath = "$YtDlpPath.backup"
 
                 if (Test-Path $YtDlpPath) {
@@ -602,6 +645,9 @@ function Update-YtDlpSilent {
 
                 try {
                     Invoke-WebRequest -Uri $downloadUrl -OutFile $YtDlpPath -TimeoutSec 30 -ErrorAction Stop
+                    if (-not $IsWindowsPlatform) {
+                        & chmod +x $YtDlpPath
+                    }
                 } catch {
                     # Download failed — restore the backup so the tool keeps working
                     if (Test-Path $backupPath) {
@@ -680,7 +726,7 @@ function Get-YtDlpArgs {
     $ytDlpArgs.Add([string]$Settings.retryCount)
 
     $ytDlpArgs.Add("--ffmpeg-location")
-    $ytDlpArgs.Add($script:EngineDir)
+    $ytDlpArgs.Add($script:FfmpegLocation)
     $ytDlpArgs.Add("--socket-timeout")
     $ytDlpArgs.Add("30")
     $ytDlpArgs.Add("--fragment-retries")
@@ -1263,6 +1309,11 @@ try {
         Write-Pulse -Text "[!] DIGITAL REAPER initialization failed" -Colors @("Red", "DarkRed") -Cycles 3
         if (-not $Silent) { Read-Host "Press Enter to exit..." }
         exit 1
+    }
+
+    if ($SetupOnly) {
+        Show-ProgressUpdate "[+] Setup complete. You can now run Digital Reaper." -Type "Success"
+        exit 0
     }
 
     $settings = Load-Settings -ConfigPath $ConfigFile
