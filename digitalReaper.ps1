@@ -19,7 +19,7 @@ param(
 
 $script:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:EngineDir   = Join-Path $script:ScriptDir "engine"
-$script:IsWindowsPlatform = ($env:OS -eq "Windows_NT")
+$script:IsWindowsPlatform = if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { ($env:OS -eq "Windows_NT") }
 $script:YtDlpAssetName = if ($script:IsWindowsPlatform) { "yt-dlp.exe" } else { "yt-dlp_linux" }
 $script:YtDlpBinaryName = if ($script:IsWindowsPlatform) { "yt-dlp.exe" } else { "yt-dlp" }
 $script:FfmpegBinaryName = if ($script:IsWindowsPlatform) { "ffmpeg.exe" } else { "ffmpeg" }
@@ -468,7 +468,7 @@ function Install-Ffmpeg {
         $systemFfmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
         $systemFfprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
         if (-not $systemFfmpeg -or -not $systemFfprobe) {
-            Show-ProgressUpdate "[!] ffmpeg and ffprobe were not found. Install them with your package manager, then re-run setup." -Type "Error"
+            Show-ProgressUpdate "[!] ffmpeg/ffprobe not found. Install with: Ubuntu/Debian='sudo apt install ffmpeg' | Fedora='sudo dnf install ffmpeg' | Arch='sudo pacman -S ffmpeg'" -Type "Error"
             return $false
         }
 
@@ -636,7 +636,12 @@ function Update-YtDlpSilent {
             }
 
             if ($latestVersion -and $latestVersion -ne $installedVersion) {
-                $downloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/download/$latestVersion/$YtDlpAssetName"
+                $asset = $response.assets | Where-Object { $_.name -eq $YtDlpAssetName } | Select-Object -First 1
+                if (-not $asset) {
+                    return [pscustomobject]@{ Type = "Warning"; Message = "[!] Could not find $YtDlpAssetName in latest release assets — skipping update." }
+                }
+
+                $downloadUrl = $asset.browser_download_url
                 $backupPath = "$YtDlpPath.backup"
 
                 if (Test-Path $YtDlpPath) {

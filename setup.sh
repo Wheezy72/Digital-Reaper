@@ -16,4 +16,4 @@ if ! command -v pwsh >/dev/null 2>&1; then
   exit 1
 fi
 
-pwsh -NoProfile -File "$SETUP_PS1" -Silent
+pwsh -NoProfile -File "$SETUP_PS1"
