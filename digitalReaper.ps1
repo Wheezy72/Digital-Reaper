@@ -490,7 +490,7 @@ function Install-YtDlp {
 
 function Install-Ffmpeg {
     if (-not $script:IsWindowsPlatform) {
-        Show-ProgressUpdate "[~] Linux detected — using system ffmpeg/ffprobe..." -Type "Update"
+        Show-ProgressUpdate "[~] Linux detected — checking for system ffmpeg/ffprobe..." -Type "Update"
         $systemFfmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
         $systemFfprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
         if (-not $systemFfmpeg -or -not $systemFfprobe) {
@@ -627,6 +627,12 @@ function Initialize-DigitalReaper {
     # Reinstall if either ffmpeg.exe or ffprobe.exe is missing
     if (-not (Test-Path $script:FfmpegPath) -or -not (Test-Path $script:FfprobePath)) {
         if (-not (Install-Ffmpeg)) { return $false }
+    }
+
+    if ($script:IsWindowsPlatform) {
+        $script:FfmpegLocation = $script:EngineDir
+    } else {
+        $script:FfmpegLocation = Split-Path -Parent $script:FfmpegPath
     }
     
     Set-HiddenAttribute -Path $script:YtDlpPath
