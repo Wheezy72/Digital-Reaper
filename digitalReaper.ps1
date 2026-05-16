@@ -19,6 +19,7 @@ param(
 
 $script:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:EngineDir   = Join-Path $script:ScriptDir "engine"
+# Prefer automatic $IsWindows when available; fall back for older hosts.
 $script:IsWindowsPlatform = if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) {
     [bool]$IsWindows
 } else {
@@ -493,8 +494,12 @@ function Install-Ffmpeg {
         Show-ProgressUpdate "[~] Linux detected — checking for system ffmpeg/ffprobe..." -Type "Update"
         $systemFfmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
         $systemFfprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
-        if (-not $systemFfmpeg -or -not $systemFfprobe) {
-            Show-ProgressUpdate "[!] ffmpeg/ffprobe not found. Install using your package manager:" -Type "Error"
+        $missingTools = @()
+        if (-not $systemFfmpeg) { $missingTools += "ffmpeg" }
+        if (-not $systemFfprobe) { $missingTools += "ffprobe" }
+        if ($missingTools.Count -gt 0) {
+            Show-ProgressUpdate "[!] Missing required tool(s): $($missingTools -join ', ')." -Type "Error"
+            Show-ProgressUpdate "[!] Install ffmpeg package using your package manager:" -Type "Error"
             Show-ProgressUpdate "    Ubuntu/Debian: sudo apt install ffmpeg" -Type "Warning"
             Show-ProgressUpdate "    Fedora:        sudo dnf install ffmpeg" -Type "Warning"
             Show-ProgressUpdate "    Arch:          sudo pacman -S ffmpeg" -Type "Warning"
@@ -503,7 +508,6 @@ function Install-Ffmpeg {
 
         $script:FfmpegPath = $systemFfmpeg.Source
         $script:FfprobePath = $systemFfprobe.Source
-        $script:FfmpegLocation = Split-Path -Parent $systemFfmpeg.Source
 
         $null = & $script:FfmpegPath -version 2>&1
         if ($LASTEXITCODE -ne 0) {
@@ -688,7 +692,7 @@ function Update-YtDlpSilent {
                     if (-not $IsWindowsPlatform) {
                         & chmod +x $YtDlpPath
                         if ($LASTEXITCODE -ne 0) {
-                            throw "chmod returned exit code $LASTEXITCODE"
+                            throw "Failed to set executable permission on yt-dlp (exit code $LASTEXITCODE). Run: chmod +x `"$YtDlpPath`""
                         }
                     }
                 } catch {
