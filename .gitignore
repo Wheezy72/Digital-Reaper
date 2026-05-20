@@ -12,3 +12,10 @@ downloads/
 .vscode/
 # User settings
 settings.json
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
