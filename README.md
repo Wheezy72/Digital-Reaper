@@ -30,11 +30,16 @@ Made by **Wheezy**
 ### 1. One-time engine setup
 
 1. **Download** this repository
-2. **Run** `initDigitalReaper.ps1` (right-click → “Run with PowerShell”)  
-   - This creates the `engine/` folder  
-   - Downloads **yt-dlp.exe** and **ffmpeg.exe** into `engine/`  
-   - Cleans up and deletes itself
-3. (Optional) **Run** `cleanup.bat` once to hide internal files and keep the folder tidy
+2. **Run setup once (pick your OS):**
+   - **Windows:** `setup.bat`
+   - **Linux:** `./setup.sh`
+   - **PowerShell (any OS):** `setup.ps1`
+3. Setup will:
+   - Create the `engine/` folder
+   - Install **yt-dlp** into `engine/`
+   - On Windows: install **ffmpeg/ffprobe** into `engine/`
+   - On Linux: validate system `ffmpeg`/`ffprobe` are available
+4. (Optional, Windows) **Run** `cleanup.bat` once to hide internal files and keep the folder tidy
 
 After that, your visible root is basically:
 
@@ -160,18 +165,21 @@ Extra simple settings added for usability:
 
 ```
 📁 DigitalReaper/
+├── 📄 setup.bat               (🪟 Windows one-shot setup launcher)
+├── 📄 setup.sh                (🐧 Linux one-shot setup launcher)
+├── 📄 setup.ps1               (⚙️ Cross-platform setup script)
 ├── 📄 digitalReaper.bat       (🎯 Main launcher)
 ├── 📄 digitalReaper.ps1       (👻 Main PowerShell engine – usually hidden)
 ├── 📄 settings.json           (⚙️ Global configuration)
 ├── 📄 audioLinks.txt          (🎵 Batch audio URLs – optional)
 ├── 📄 videoLinks.txt          (📼 Batch video URLs – optional)
-├── 📄 initDigitalReaper.ps1   (🚀 One-time engine bootstrap – self-deletes)
 ├── 📄 cleanup.bat             (🧹 Hides internal files for a clean view)
 ├── 📄 scheduler.bat           (⏰ Schedule / remove / run / status — all in one)
 ├── 📄 README.md               (📖 This file)
 ├── 📁 engine/                 (⚙️ Internal binaries)
-│   ├── yt-dlp.exe             (Downloader binary)
-│   └── ffmpeg.exe             (Media processing binary)
+│   ├── yt-dlp(.exe)           (Downloader binary)
+│   ├── ffmpeg(.exe)           (Media processing binary)
+│   └── ffprobe(.exe)          (Media probe binary)
 └── 📁 downloads/              (📥 Output folder)
     ├── audio/                 (Extracted audio)
     └── videos/                (Video files)
@@ -206,11 +214,12 @@ https://youtu.be/9bZkp7q19f0
 
 ## 🛠️ Requirements
 
-- **Windows 10/11** (PowerShell 5.1+)
+- **Windows 10/11** (PowerShell 5.1+), or **Linux** (PowerShell 7+)
 - **Internet connection** for downloads and updates
+- **ffmpeg + ffprobe** (auto-installed on Windows, system package on Linux)
 - **~200MB free space** for binaries and cache
 
-*No additional software installation required!*
+Linux users: install PowerShell and ffmpeg first, then run `./setup.sh`.
 
 ---
 
