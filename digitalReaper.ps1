@@ -7,7 +7,7 @@
 #>
 
 param(
-    [string]$LinksFile  = "",
+    [string]$LinksFile = "",
     [string]$ConfigFile = "",
     [switch]$Silent,
     [switch]$SetupOnly
@@ -17,15 +17,17 @@ param(
 # --- SCRIPT CONFIGURATION ---
 # ===================================================================
 
-$script:ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
-$script:EngineDir   = Join-Path $script:ScriptDir "engine"
+$script:ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$script:EngineDir = Join-Path $script:ScriptDir "engine"
 # Prefer automatic $IsWindows when available; fall back for older hosts.
 $script:IsWindowsPlatform = if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) {
     [bool]$IsWindows
-} else {
+}
+else {
     try {
         [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
-    } catch {
+    }
+    catch {
         ($PSVersionTable.PSEdition -eq "Desktop") -or ($env:OS -eq "Windows_NT")
     }
 }
@@ -33,13 +35,13 @@ $script:YtDlpAssetName = if ($script:IsWindowsPlatform) { "yt-dlp.exe" } else { 
 $script:YtDlpBinaryName = if ($script:IsWindowsPlatform) { "yt-dlp.exe" } else { "yt-dlp" }
 $script:FfmpegBinaryName = if ($script:IsWindowsPlatform) { "ffmpeg.exe" } else { "ffmpeg" }
 $script:FfprobeBinaryName = if ($script:IsWindowsPlatform) { "ffprobe.exe" } else { "ffprobe" }
-$script:YtDlpPath   = Join-Path $script:EngineDir $script:YtDlpBinaryName
-$script:FfmpegPath  = Join-Path $script:EngineDir $script:FfmpegBinaryName
+$script:YtDlpPath = Join-Path $script:EngineDir $script:YtDlpBinaryName
+$script:FfmpegPath = Join-Path $script:EngineDir $script:FfmpegBinaryName
 $script:FfprobePath = Join-Path $script:EngineDir $script:FfprobeBinaryName
 $script:FfmpegLocation = $script:EngineDir
 
-$script:DownloadsDir      = Join-Path $script:ScriptDir "downloads"
-$script:DefaultLinksFile  = Join-Path $script:ScriptDir "links.txt"
+$script:DownloadsDir = Join-Path $script:ScriptDir "downloads"
+$script:DefaultLinksFile = Join-Path $script:ScriptDir "links.txt"
 $script:DefaultConfigFile = Join-Path $script:ScriptDir "settings.json"
 
 # Dedicated audio/video link files + output folders
@@ -108,9 +110,11 @@ function Show-ProgressUpdate {
     $timestamp = Get-Date -Format "HH:mm:ss"
     if ($Type -eq "Success") {
         Write-Pulse -Text "[$timestamp] $Status" -Colors @("Green", "White", "Green") -Cycles 1 -Speed 200
-    } elseif ($Type -eq "Error") {
+    }
+    elseif ($Type -eq "Error") {
         Write-Pulse -Text "[$timestamp] $Status" -Colors @("Red", "DarkRed", "Red") -Cycles 2 -Speed 300
-    } else {
+    }
+    else {
         $color = switch ($Type) {
             "Warning" { "Yellow" }; "Target" { "Cyan" }; "System" { "Blue" }; "Update" { "Magenta" }
             default { "White" }
@@ -122,7 +126,8 @@ function Show-ProgressUpdate {
 function Get-ConsoleWidth {
     try {
         return [Math]::Max(40, $Host.UI.RawUI.WindowSize.Width - 1)
-    } catch {
+    }
+    catch {
         return 100
     }
 }
@@ -168,7 +173,8 @@ function Invoke-WithStatusDots {
             throw ($job.ChildJobs[0].JobStateInfo.Reason)
         }
         return $output
-    } finally {
+    }
+    finally {
         Clear-StatusLine
         Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
     }
@@ -187,7 +193,8 @@ function Show-StartupSequence {
     Write-Host ""
 }
 
-function Show-CompletionBanner {    $prodByWheezy = @'
+function Show-CompletionBanner {
+    $prodByWheezy = @'
     ____                 __   __             _       ____                         
    / __ \_______  ____/ /  / /_  __  __   | |     / / /_  ___  ___  ____  __  __
   / /_/ / ___/ __ \/ __  /  / __ \/ / / /   | | /| / / __ \/ _ \/ _ \/_  / / / / /
@@ -285,21 +292,21 @@ function Test-ValidUrl {
 
 function Get-DefaultSettings {
     return @{
-        videoQuality      = "1080p"
-        audioFormat       = "mp3"
-        useHEVC           = $true
-        downloadSubtitles = $true
-        subtitleLanguages = @("en", "en-US")
-        outputTemplate    = "[%(upload_date)s] %(title)s [%(id)s].%(ext)s"
-        autoUpdate        = $true
-        oneClickMode      = $true
+        videoQuality        = "1080p"
+        audioFormat         = "mp3"
+        useHEVC             = $true
+        downloadSubtitles   = $true
+        subtitleLanguages   = @("en", "en-US")
+        outputTemplate      = "[%(upload_date)s] %(title)s [%(id)s].%(ext)s"
+        autoUpdate          = $true
+        oneClickMode        = $true
         defaultDownloadType = "video"
-        outputFolder      = ""
-        cookieSource      = "none"
-        maxRate           = "2M"
+        outputFolder        = ""
+        cookieSource        = "none"
+        maxRate             = "2M"
         concurrentFragments = 1
-        retryCount        = 8
-        outerRetryCount   = $script:DefaultOuterRetryCount
+        retryCount          = 8
+        outerRetryCount     = $script:DefaultOuterRetryCount
     }
 }
 
@@ -323,14 +330,17 @@ function Load-Settings {
         try {
             Merge-SettingsFromFile -Settings $settings -FilePath $ConfigPath
             Show-ProgressUpdate "Settings loaded from: $ConfigPath" -Type "Success"
-        } catch {
+        }
+        catch {
             Show-ProgressUpdate "Error loading settings file. Using defaults." -Type "Warning"
         }
-    } elseif (Test-Path $script:DefaultConfigFile) {
+    }
+    elseif (Test-Path $script:DefaultConfigFile) {
         try {
             Merge-SettingsFromFile -Settings $settings -FilePath $script:DefaultConfigFile
             Show-ProgressUpdate "Settings loaded from: settings.json" -Type "Success"
-        } catch {
+        }
+        catch {
             Show-ProgressUpdate "Error loading settings. Using defaults." -Type "Warning"
         }
     }
@@ -347,7 +357,8 @@ function Save-Settings {
         }
         $ordered | ConvertTo-Json -Depth 6 | Set-Content -Path $script:DefaultConfigFile
         Show-ProgressUpdate "[+] Settings saved to settings.json" -Type "Success"
-    } catch {
+    }
+    catch {
         Show-ProgressUpdate "[!] Failed to save settings: $($_.Exception.Message)" -Type "Warning"
     }
 }
@@ -368,9 +379,10 @@ function Show-SimpleSettingsPage {
         switch ($choice) {
             "1" {
                 $quality = Read-Host "Set quality (720p/1080p/1440p/4K)"
-                if ($quality -in @("720p","1080p","1440p","4K")) {
+                if ($quality -in @("720p", "1080p", "1440p", "4K")) {
                     $Settings.videoQuality = $quality
-                } else {
+                }
+                else {
                     Show-ProgressUpdate "[!] Invalid quality. Keeping current value." -Type "Warning"
                 }
             }
@@ -384,9 +396,10 @@ function Show-SimpleSettingsPage {
             }
             "4" {
                 $cookie = Read-Host "Cookie source (none/chrome/edge/firefox)"
-                if ($cookie -in @("none","chrome","edge","firefox")) {
+                if ($cookie -in @("none", "chrome", "edge", "firefox")) {
                     $Settings.cookieSource = $cookie
-                } else {
+                }
+                else {
                     Show-ProgressUpdate "[!] Invalid cookie source. Keeping current value." -Type "Warning"
                 }
             }
@@ -441,7 +454,8 @@ function Set-HiddenAttribute {
                 $item.Attributes = $item.Attributes -bor [System.IO.FileAttributes]::Hidden
             }
         }
-    } catch {
+    }
+    catch {
         # Silent fail
     }
 }
@@ -458,7 +472,8 @@ function Set-ExecutablePermission {
             throw "chmod returned exit code $LASTEXITCODE"
         }
         return $true
-    } catch {
+    }
+    catch {
         Show-ProgressUpdate "[!] Failed to mark file executable: $Path ($($_.Exception.Message))" -Type "Error"
         return $false
     }
@@ -467,9 +482,9 @@ function Set-ExecutablePermission {
 function Install-YtDlp {
     Show-ProgressUpdate "[~] yt-dlp not found — downloading latest release..." -Type "Update"
     try {
-        $apiUrl  = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
+        $apiUrl = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
         $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'DigitalReaper' } -TimeoutSec 15 -ErrorAction Stop
-        $asset   = $release.assets | Where-Object { $_.name -eq $script:YtDlpAssetName } | Select-Object -First 1
+        $asset = $release.assets | Where-Object { $_.name -eq $script:YtDlpAssetName } | Select-Object -First 1
         if (-not $asset) { throw "$($script:YtDlpAssetName) asset not found in latest release." }
 
         Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $script:YtDlpPath -TimeoutSec 120 -ErrorAction Stop
@@ -483,7 +498,8 @@ function Install-YtDlp {
         Show-ProgressUpdate "[+] yt-dlp installed ($($release.tag_name))" -Type "Success"
         Set-Content -Path $script:VersionFilePath -Value $release.tag_name
         return $true
-    } catch {
+    }
+    catch {
         Show-ProgressUpdate "[!] Failed to download yt-dlp: $($_.Exception.Message)" -Type "Error"
         return $false
     }
@@ -527,7 +543,7 @@ function Install-Ffmpeg {
     Show-ProgressUpdate "[~] ffmpeg not found — downloading static build (this may take a minute)..." -Type "Update"
     # Use the static (non-shared) GPL build so ffmpeg.exe and ffprobe.exe are
     # self-contained executables with no companion DLLs required.
-    $zipUrl  = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+    $zipUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
     $zipPath = Join-Path $env:TEMP "ffmpeg-reaper.zip"
     $extractPath = Join-Path $env:TEMP "ffmpeg-reaper"
     try {
@@ -542,21 +558,21 @@ function Install-Ffmpeg {
 
         # Locate ffmpeg.exe (lives in the bin/ subfolder of the top-level archive folder)
         $ffmpegExe = Get-ChildItem -Path $extractPath -Filter "ffmpeg.exe" -Recurse -ErrorAction SilentlyContinue |
-                     Select-Object -First 1
+        Select-Object -First 1
         if (-not $ffmpegExe) { throw "ffmpeg.exe not found inside archive." }
 
         # Locate ffprobe.exe — yt-dlp needs it alongside ffmpeg.exe
         $ffprobeExe = Get-ChildItem -Path $extractPath -Filter "ffprobe.exe" -Recurse -ErrorAction SilentlyContinue |
-                      Select-Object -First 1
+        Select-Object -First 1
         if (-not $ffprobeExe) { throw "ffprobe.exe not found inside archive." }
 
         Copy-Item $ffmpegExe.FullName  $script:FfmpegPath  -Force -ErrorAction Stop
         Copy-Item $ffprobeExe.FullName $script:FfprobePath -Force -ErrorAction Stop
 
         # Verify files are non-empty
-        $installedFfmpeg  = Get-Item $script:FfmpegPath  -ErrorAction SilentlyContinue
+        $installedFfmpeg = Get-Item $script:FfmpegPath  -ErrorAction SilentlyContinue
         $installedFfprobe = Get-Item $script:FfprobePath -ErrorAction SilentlyContinue
-        if (-not $installedFfmpeg  -or $installedFfmpeg.Length  -eq 0) { throw "Copied ffmpeg.exe is empty." }
+        if (-not $installedFfmpeg -or $installedFfmpeg.Length -eq 0) { throw "Copied ffmpeg.exe is empty." }
         if (-not $installedFfprobe -or $installedFfprobe.Length -eq 0) { throw "Copied ffprobe.exe is empty." }
 
         # Functional verification — make sure both binaries actually run
@@ -567,13 +583,15 @@ function Install-Ffmpeg {
 
         Show-ProgressUpdate "[+] ffmpeg and ffprobe installed" -Type "Success"
         return $true
-    } catch {
+    }
+    catch {
         Show-ProgressUpdate "[!] Failed to install ffmpeg: $($_.Exception.Message)" -Type "Error"
         # Remove any partial files so the next launch will retry cleanly
         Remove-Item $script:FfmpegPath  -Force -ErrorAction SilentlyContinue
         Remove-Item $script:FfprobePath -Force -ErrorAction SilentlyContinue
         return $false
-    } finally {
+    }
+    finally {
         Remove-Item $zipPath     -Force -ErrorAction SilentlyContinue
         Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -635,7 +653,8 @@ function Initialize-DigitalReaper {
 
     if ($script:IsWindowsPlatform) {
         $script:FfmpegLocation = $script:EngineDir
-    } else {
+    }
+    else {
         $script:FfmpegLocation = Split-Path -Parent $script:FfmpegPath
     }
     
@@ -695,7 +714,8 @@ function Update-YtDlpSilent {
                             throw "Failed to set executable permission on yt-dlp (exit code $LASTEXITCODE). Run: chmod +x `"$YtDlpPath`""
                         }
                     }
-                } catch {
+                }
+                catch {
                     # Download failed — restore the backup so the tool keeps working
                     if (Test-Path $backupPath) {
                         Copy-Item $backupPath $YtDlpPath -Force
@@ -721,7 +741,8 @@ function Update-YtDlpSilent {
 
                 return [pscustomobject]@{ Type = "Success"; Message = "yt-dlp updated to $latestVersion" }
             }
-        } catch {
+        }
+        catch {
             # Silent fail for updates
         }
     }
@@ -739,6 +760,158 @@ function Update-YtDlpSilent {
 # ===================================================================
 
 # ===================================================================
+# --- PLAYLIST DETECTION & DOWNLOAD ---
+# ===================================================================
+
+function Test-PlaylistUrl {
+    param([string]$Url)
+    # YouTube playlist patterns: list= param, /playlist path, or music playlist
+    if ($Url -match '[?&]list=') { return $true }
+    if ($Url -match 'youtube\.com/playlist') { return $true }
+    if ($Url -match 'music\.youtube\.com/playlist') { return $true }
+    return $false
+}
+
+function Get-PlaylistMetadata {
+    param([string]$Url)
+    try {
+        Show-ProgressUpdate "[~] Probing playlist metadata..." -Type "System"
+        $jsonLines = & $script:YtDlpPath --flat-playlist --dump-single-json --no-warnings $Url 2>&1
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) { return $null }
+        $raw = ($jsonLines | Where-Object { $_ -is [string] }) -join ""
+        if (-not $raw) { $raw = [string]$jsonLines }
+        $data = $raw | ConvertFrom-Json
+        $title = if ($data.title) { $data.title } else { "Playlist" }
+        $entries = @()
+        if ($data.entries) { $entries = @($data.entries) }
+        return [pscustomobject]@{
+            Title      = $title
+            EntryCount = $entries.Count
+            Entries    = $entries
+        }
+    }
+    catch {
+        Show-ProgressUpdate "[!] Could not read playlist info: $($_.Exception.Message)" -Type "Warning"
+        return $null
+    }
+}
+
+function Get-SafeFolderName {
+    param([string]$Name)
+    # Remove characters illegal in Windows folder names, collapse whitespace
+    $invalidChars = [System.IO.Path]::GetInvalidFileNameChars()
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($c in $Name.ToCharArray()) {
+        if ($invalidChars -notcontains $c) {
+            [void]$sb.Append($c)
+        }
+    }
+    $safe = ($sb.ToString() -replace '\s+', ' ').Trim()
+    if ($safe.Length -gt 80) { $safe = $safe.Substring(0, 80).Trim() }
+    if ([string]::IsNullOrWhiteSpace($safe)) { $safe = 'Playlist' }
+    return $safe
+}
+
+function Invoke-PlaylistDownload {
+    param(
+        [hashtable]$Settings,
+        [string]$DownloadType,
+        [string]$Url
+    )
+
+    $meta = Get-PlaylistMetadata -Url $Url
+    if (-not $meta -or $meta.EntryCount -eq 0) {
+        Show-ProgressUpdate "[!] Could not detect playlist items. Falling back to normal download." -Type "Warning"
+        return $null  # signal caller to fall back
+    }
+
+    $safeName = Get-SafeFolderName -Name $meta.Title
+    $baseDir = Get-OutputDirForType -Settings $Settings -DownloadType $DownloadType
+    $playlistDir = Join-Path $baseDir $safeName
+    Ensure-Directory -Path $playlistDir
+
+    # --- Playlist banner ---
+    Write-Host ""
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkGray
+    Write-Host "  |  DIGITAL REAPER  >>  " -NoNewline -ForegroundColor Gray
+    Write-Host "PLAYLIST MODE" -ForegroundColor Magenta
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkGray
+    Write-Host "  | Playlist : " -NoNewline -ForegroundColor Gray
+    Write-Host $meta.Title -ForegroundColor Cyan
+    Write-Host "  | Items    : " -NoNewline -ForegroundColor Gray
+    Write-Host $meta.EntryCount -ForegroundColor Cyan
+    Write-Host "  | Type     : " -NoNewline -ForegroundColor Gray
+    Write-Host $DownloadType.ToUpper() -ForegroundColor Yellow
+    Write-Host "  | Output   : " -NoNewline -ForegroundColor Gray
+    Write-Host $playlistDir -ForegroundColor Yellow
+    if ($DownloadType -eq "video") {
+        Write-Host "  | Quality  : " -NoNewline -ForegroundColor Gray
+        Write-Host $Settings.videoQuality -ForegroundColor Magenta
+    }
+    Write-Host "  +-------------------------------------------------+" -ForegroundColor DarkGray
+    Write-Host ""
+
+    $successCount = 0
+    $failureCount = 0
+    $totalItems = $meta.EntryCount
+    # Determine zero-padding width from total item count (e.g. 3 digits for 100+ items)
+    $padWidth = [Math]::Max(2, $totalItems.ToString().Length)
+
+    for ($i = 0; $i -lt $meta.Entries.Count; $i++) {
+        $entry = $meta.Entries[$i]
+        $idx = $i + 1
+        $entryUrl = if ($entry.url) { $entry.url } elseif ($entry.id) { "https://www.youtube.com/watch?v=$($entry.id)" } else { $null }
+        $entryTitle = if ($entry.title) { $entry.title } else { "Item $idx" }
+
+        if (-not $entryUrl) {
+            $failureCount++
+            Write-Host "  [ $idx/$totalItems ] " -NoNewline -ForegroundColor DarkGray
+            Write-Host "SKIPPED (no URL)" -ForegroundColor Red
+            continue
+        }
+
+        Write-Host "  [ $idx/$totalItems ] " -NoNewline -ForegroundColor DarkGray
+        Write-Host "ACQUIRING" -NoNewline -ForegroundColor Cyan
+        Write-Host " >> " -NoNewline -ForegroundColor DarkGray
+        Write-Host $entryTitle -ForegroundColor White
+
+        try {
+            # Build per-item template with the playlist position baked in
+            $indexPrefix = $idx.ToString().PadLeft($padWidth, '0')
+            $itemTemplate = $indexPrefix + ' - %(title)s [%(id)s].%(ext)s'
+            $baseArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $playlistDir -OutputTemplate $itemTemplate
+            # Tell yt-dlp NOT to download the whole playlist from this single-video URL
+            $baseArgs += "--no-playlist"
+            $downloadResult = Invoke-YtDlpForUrl -Settings $Settings -DownloadType $DownloadType -OutputDir $playlistDir -Url $entryUrl -CustomArgs $baseArgs
+            if ($downloadResult.Success) {
+                $successCount++
+                Write-Host "  [ $idx/$totalItems ] " -NoNewline -ForegroundColor DarkGray
+                Write-Host "TARGET ACQUIRED" -ForegroundColor Green
+            }
+            else {
+                $failureCount++
+                $friendly = Get-FriendlyErrorHint -ErrorText $downloadResult.ErrorText
+                Write-Host "  [ $idx/$totalItems ] " -NoNewline -ForegroundColor DarkGray
+                Write-Host "TARGET MISSED  >> $friendly" -ForegroundColor Red
+            }
+        }
+        catch {
+            $failureCount++
+            Write-Host "  [ $idx/$totalItems ] " -NoNewline -ForegroundColor DarkGray
+            Write-Host "TARGET MISSED  >> $($_.Exception.Message)" -ForegroundColor Red
+        }
+        Write-Host ""
+    }
+
+    return [pscustomobject]@{
+        Success   = $successCount
+        Failure   = $failureCount
+        OutputDir = $playlistDir
+    }
+}
+
+# ===================================================================
 # --- YT-DLP ARGUMENT BUILDER & BATCH HELPERS ---
 # ===================================================================
 
@@ -747,6 +920,7 @@ function Get-YtDlpArgs {
         [hashtable]$Settings,
         [string]$DownloadType,   # "audio" or "video"
         [string]$OutputDir,
+        [string]$OutputTemplate = "",
         [switch]$UseFallbackFormat
     )
 
@@ -815,14 +989,15 @@ function Get-YtDlpArgs {
         $ytDlpArgs.Add($Settings.audioFormat)
         $ytDlpArgs.Add("--audio-quality")
         $ytDlpArgs.Add("0")
-    } else {
+    }
+    else {
         $codecPreference = if ($Settings.useHEVC) { "[vcodec^=hevc]/[vcodec^=h265]/" } else { "" }
 
         $height = switch ($Settings.videoQuality) {
-            "720p"  { 720 }
+            "720p" { 720 }
             "1080p" { 1080 }
             "1440p" { 1440 }
-            "4K"    { 2160 }
+            "4K" { 2160 }
             default { 1080 }
         }
 
@@ -833,7 +1008,8 @@ function Get-YtDlpArgs {
 
         $format = if ($UseFallbackFormat) {
             "bestvideo+bestaudio/best"
-        } else {
+        }
+        else {
             "($videoSelector)+bestaudio/best[height<=$height]"
         }
 
@@ -843,9 +1019,10 @@ function Get-YtDlpArgs {
         $ytDlpArgs.Add("mp4")
     }
 
-    $outputTemplate = Join-Path -Path $OutputDir -ChildPath $Settings.outputTemplate
+    $template = if ($OutputTemplate) { $OutputTemplate } else { $Settings.outputTemplate }
+    $outputPath = Join-Path -Path $OutputDir -ChildPath $template
     $ytDlpArgs.Add("-o")
-    $ytDlpArgs.Add($outputTemplate)
+    $ytDlpArgs.Add($outputPath)
 
     return $ytDlpArgs
 }
@@ -871,12 +1048,13 @@ function Invoke-YtDlpForUrl {
         [hashtable]$Settings,
         [string]$DownloadType,
         [string]$OutputDir,
-        [string]$Url
+        [string]$Url,
+        [string[]]$CustomArgs = @()
     )
     $maxAttempts = if ([int]$Settings.outerRetryCount -gt 0) { [int]$Settings.outerRetryCount } else { $script:DefaultOuterRetryCount }
     $attempt = 0
     $lastErrorText = ""
-    $baseArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir
+    $baseArgs = if ($CustomArgs.Count -gt 0) { $CustomArgs } else { Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir }
 
     while ($attempt -lt $maxAttempts) {
         $attempt++
@@ -904,7 +1082,7 @@ function Invoke-YtDlpForUrl {
     }
 
     return [pscustomobject]@{
-        Success = $false
+        Success   = $false
         ErrorText = $lastErrorText
     }
 }
@@ -915,7 +1093,7 @@ function Invoke-YtDlpAndCapture {
     $exitCode = $LASTEXITCODE
 
     return [pscustomobject]@{
-        Success = ($exitCode -eq 0)
+        Success   = ($exitCode -eq 0)
         ErrorText = ""
     }
 }
@@ -940,7 +1118,8 @@ function Get-UrlsSmartMode {
                             $urlsFromConfig += $link
                         }
                     }
-                } else {
+                }
+                else {
                     $singleLink = [string]$configData.links
                     $singleLink = $singleLink.Trim()
                     if (-not [string]::IsNullOrWhiteSpace($singleLink)) {
@@ -953,7 +1132,8 @@ function Get-UrlsSmartMode {
                     return $urlsFromConfig
                 }
             }
-        } catch {
+        }
+        catch {
             Show-ProgressUpdate "[!] Failed to read links from manifest: $ConfigFile. Falling back to standard input methods." -Type "Warning"
         }
     }
@@ -991,14 +1171,16 @@ function Get-UrlsSmartMode {
             }
         }
         return @($url)
-    } else {
+    }
+    else {
         $filePath = ""
         while ([string]::IsNullOrWhiteSpace($filePath) -or -not (Test-Path $filePath)) {
             Write-Host ">> Enter path to URLs file (.txt): " -ForegroundColor "Magenta"
             $filePath = Read-Host
             if ([string]::IsNullOrWhiteSpace($filePath)) { 
                 Write-Pulse -Text "`n[!] File path cannot be empty." -Colors @("Red", "Yellow") -Cycles 1
-            } elseif (-not (Test-Path $filePath)) {
+            }
+            elseif (-not (Test-Path $filePath)) {
                 Write-Pulse -Text "`n[!] File not found: $filePath" -Colors @("Red", "Yellow") -Cycles 1
             }
         }
@@ -1033,9 +1215,9 @@ function Process-LinkFile {
             $originalUrl = Remove-InvisibleCharacters -Text $line
 
             $entry = [pscustomobject]@{
-                Index        = $i
-                OriginalUrl  = $originalUrl
-                WasSuccess   = $false
+                Index       = $i
+                OriginalUrl = $originalUrl
+                WasSuccess  = $false
             }
             $linkEntries += $entry
         }
@@ -1071,12 +1253,14 @@ function Process-LinkFile {
                 $entry.WasSuccess = $true
                 Write-Host "  [ $targetNum/$($linkEntries.Count) ] " -NoNewline -ForegroundColor DarkGray
                 Write-Host "TARGET ACQUIRED" -ForegroundColor Green
-            } else {
+            }
+            else {
                 $friendly = Get-FriendlyErrorHint -ErrorText $downloadResult.ErrorText
                 throw "$friendly"
             }
 
-        } catch {
+        }
+        catch {
             $failureCount++
             Write-Host "  [ $targetNum/$($linkEntries.Count) ] " -NoNewline -ForegroundColor DarkGray
             Write-Host "TARGET MISSED  >> $($_.Exception.Message)" -ForegroundColor Red
@@ -1111,7 +1295,8 @@ function Remove-SuccessfulLinks {
             if ($SuccessUrls -notcontains $cleanLine) {
                 $linesOut.Add($line)
             }
-        } else {
+        }
+        else {
             $linesOut.Add($line)
         }
     }
@@ -1136,7 +1321,8 @@ function Show-MissionSummary {
 
     if ($SuccessCount -gt 0) {
         Show-CompletionBanner
-    } else {
+    }
+    else {
         Write-Pulse -Text "`n[!] DIGITAL REAPER: All downloads failed." -Colors @("Red", "DarkRed") -Cycles 3
     }
 }
@@ -1201,7 +1387,8 @@ function Run-BatchMode {
 
         $summaryDir = Get-BaseOutputDir -Settings $Settings
         Show-MissionSummary -SuccessCount $batchSuccess -FailureCount $batchFailure -OutputDir $summaryDir -Silent:$Silent
-    } finally {
+    }
+    finally {
         Remove-Item $script:LockFilePath -Force -ErrorAction SilentlyContinue
     }
 }
@@ -1252,7 +1439,8 @@ function Run-InteractiveMode {
                 }
             }
         }
-    } else {
+    }
+    else {
         $urls = Get-UrlsSmartMode
     }
     
@@ -1267,7 +1455,8 @@ function Run-InteractiveMode {
     # --- Ask user: audio or video ---
     $downloadType = if ($usedOneClick) {
         if ($Settings.defaultDownloadType -eq "audio") { "2" } else { "1" }
-    } else {
+    }
+    else {
         ""
     }
     if (-not $usedOneClick) {
@@ -1282,24 +1471,55 @@ function Run-InteractiveMode {
 
     if ($downloadType -eq "2") {
         $resolvedType = "audio"
-        $outputDir    = Get-OutputDirForType -Settings $Settings -DownloadType "audio"
-    } else {
+        $outputDir = Get-OutputDirForType -Settings $Settings -DownloadType "audio"
+    }
+    else {
         $resolvedType = "video"
-        $outputDir    = Get-OutputDirForType -Settings $Settings -DownloadType "video"
+        $outputDir = Get-OutputDirForType -Settings $Settings -DownloadType "video"
     }
 
     Ensure-Directory -Path $outputDir
+
+    # --- Smart playlist detection ---
+    # If there's exactly 1 URL and it looks like a playlist, route to playlist mode
+    if ($urls.Count -eq 1 -and (Test-PlaylistUrl -Url $urls[0])) {
+        Show-ProgressUpdate "[+] Playlist URL detected — entering PLAYLIST MODE" -Type "Update"
+        $plResult = Invoke-PlaylistDownload -Settings $Settings -DownloadType $resolvedType -Url $urls[0]
+        if ($plResult) {
+            # Remove from source file on any success
+            if ($plResult.Success -gt 0) {
+                Remove-SuccessfulLinks -FilePath $script:SourceFile -SuccessUrls @($urls[0])
+            }
+            Show-MissionSummary -SuccessCount $plResult.Success -FailureCount $plResult.Failure -OutputDir $plResult.OutputDir -Silent:$Silent
+            return
+        }
+        # If playlist probe failed, fall through to normal single-URL download
+        Show-ProgressUpdate "[~] Falling back to standard download..." -Type "Warning"
+    }
 
     $quality = if ($resolvedType -eq "video") { $Settings.videoQuality } else { "" }
     Show-DownloadBanner -TypeLabel $resolvedType.ToUpper() -Mode "EXFILTRATION" -TargetCount $urls.Count -OutputDir $outputDir -Quality $quality
 
     $successCount = 0
     $failureCount = 0
-    $successUrls  = @()
-    $targetNum    = 0
+    $successUrls = @()
+    $targetNum = 0
 
     foreach ($url in $urls) {
         $targetNum++
+
+        # Check each URL for playlist — handle inline
+        if ($urls.Count -gt 1 -and (Test-PlaylistUrl -Url $url)) {
+            Show-ProgressUpdate "[+] Playlist detected in batch: $url" -Type "Update"
+            $plResult = Invoke-PlaylistDownload -Settings $Settings -DownloadType $resolvedType -Url $url
+            if ($plResult) {
+                $successCount += $plResult.Success
+                $failureCount += $plResult.Failure
+                if ($plResult.Success -gt 0) { $successUrls += $url }
+                continue
+            }
+        }
+
         try {
             Write-Host "  [ $targetNum/$($urls.Count) ] " -NoNewline -ForegroundColor DarkGray
             Write-Host "ACQUIRING TARGET" -NoNewline -ForegroundColor Cyan
@@ -1312,12 +1532,14 @@ function Run-InteractiveMode {
                 $successUrls += $url
                 Write-Host "  [ $targetNum/$($urls.Count) ] " -NoNewline -ForegroundColor DarkGray
                 Write-Host "TARGET ACQUIRED" -ForegroundColor Green
-            } else {
+            }
+            else {
                 $friendly = Get-FriendlyErrorHint -ErrorText $downloadResult.ErrorText
                 throw "$friendly"
             }
             
-        } catch {
+        }
+        catch {
             $failureCount++
             Write-Host "  [ $targetNum/$($urls.Count) ] " -NoNewline -ForegroundColor DarkGray
             Write-Host "TARGET MISSED  >> $($_.Exception.Message)" -ForegroundColor Red
@@ -1339,7 +1561,7 @@ function Show-ExitPrompt {
         Write-Host "2) Return to DigitalReaper menu" -ForegroundColor White
         Write-Host "3) Download another item" -ForegroundColor White
         $choice = Read-Host "Choose (1-3)"
-        if ($choice -in @("1","2","3")) { return $choice }
+        if ($choice -in @("1", "2", "3")) { return $choice }
         Show-ProgressUpdate "[!] Invalid choice. Enter 1, 2, or 3." -Type "Warning"
     }
 }
@@ -1374,9 +1596,11 @@ try {
     while (-not $shouldExit) {
         if ($nextMode -eq "quick") {
             Run-InteractiveMode -Settings $settings -ForceOneClick
-        } elseif (Should-RunBatchMode) {
+        }
+        elseif (Should-RunBatchMode) {
             Run-BatchMode -Settings $settings
-        } else {
+        }
+        else {
             Run-InteractiveMode -Settings $settings
         }
 
@@ -1390,7 +1614,8 @@ try {
         }
     }
 
-} catch {
+}
+catch {
     Write-Host "`n[!] CRITICAL ERROR: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "Stack trace:" -ForegroundColor DarkRed
     Write-Host $_.ScriptStackTrace -ForegroundColor DarkRed
