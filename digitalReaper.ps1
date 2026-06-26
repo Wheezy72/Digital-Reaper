@@ -1,8 +1,8 @@
 ﻿<#
 ========================================================================
-    DIGITAL REAPER - YouTube Downloader
+    DIGITAL REAPER -Video/Audio Downloader
     Custom tool for grabbing content with style
-    Made by Wheezy for the culture
+    Made by Wheezy for Wheezy
 ========================================================================
 #>
 
@@ -1434,7 +1434,7 @@ function Run-InteractiveMode {
         [switch]$ForceOneClick
     )
 
-        $urls = @()
+    $urls = @()
     $usedOneClick = $false
     $forceNoPlaylistUrls = @{}
     $hasExplicitInputOrConfig = -not [string]::IsNullOrWhiteSpace($LinksFile) -or -not [string]::IsNullOrWhiteSpace($ConfigFile)
@@ -1518,7 +1518,7 @@ function Run-InteractiveMode {
 
     # --- Smart playlist detection ---
     # If there's exactly 1 URL and it looks like a playlist, route to playlist mode
-        if ($urls.Count -eq 1 -and (Test-PlaylistUrl -Url $urls[0])) {
+    if ($urls.Count -eq 1 -and (Test-PlaylistUrl -Url $urls[0])) {
         $downloadAsPlaylist = $true
         if (-not $Silent -and (Test-VideoInPlaylistUrl -Url $urls[0])) {
             $choice = Get-PlaylistChoice -Url $urls[0]
@@ -1556,7 +1556,7 @@ function Run-InteractiveMode {
         $targetNum++
 
         # Check each URL for playlist — handle inline
-                $downloadAsPlaylist = $true
+        $downloadAsPlaylist = $true
         if ($urls.Count -gt 1 -and (Test-PlaylistUrl -Url $url)) {
             if (-not $Silent -and (Test-VideoInPlaylistUrl -Url $url)) {
                 $choice = Get-PlaylistChoice -Url $url
@@ -1584,7 +1584,7 @@ function Run-InteractiveMode {
             Write-Host " >> " -NoNewline -ForegroundColor DarkGray
             Write-Host $url -ForegroundColor White
 
-                        $downloadResult = if ($forceNoPlaylistUrls.ContainsKey($url)) {
+            $downloadResult = if ($forceNoPlaylistUrls.ContainsKey($url)) {
                 $customArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $resolvedType -OutputDir $outputDir
                 $customArgs += "--no-playlist"
                 Invoke-YtDlpForUrl -Settings $Settings -DownloadType $resolvedType -OutputDir $outputDir -Url $url -CustomArgs $customArgs
