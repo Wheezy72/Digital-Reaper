@@ -772,6 +772,41 @@ function Test-PlaylistUrl {
     return $false
 }
 
+function Test-VideoInPlaylistUrl {
+    param([string]$Url)
+    # Check if it has a playlist marker
+    if (-not (Test-PlaylistUrl -Url $Url)) { return $false }
+    
+    # Check if it also has video indicators
+    if ($Url -match '[?&]v=') { return $true }
+    if ($Url -match 'youtu\.be/') { return $true }
+    if ($Url -match '/shorts/') { return $true }
+    if ($Url -match '/watch\b') { return $true }
+    
+    return $false
+}
+
+function Get-PlaylistChoice {
+    param([string]$Url)
+    Write-Host ""
+    Write-Host "--------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host " Playlist-formatted link detected:" -ForegroundColor Yellow
+    Write-Host " $Url" -ForegroundColor Cyan
+    Write-Host " Do you want to download the entire playlist or just this single item?" -ForegroundColor Yellow
+    Write-Host " Options: 1=Whole Playlist, 2=Just Single Video/Audio" -ForegroundColor Gray
+    Write-Host "--------------------------------------------------" -ForegroundColor DarkGray
+    
+    $choice = ""
+    while ($choice -notin @("1", "2")) {
+        Write-Host -NoNewline "> " -ForegroundColor Yellow
+        $choice = (Read-Host).Trim()
+        if ($choice -notin @("1", "2")) {
+            Write-Pulse -Text "[!] Invalid choice. Enter 1 or 2." -Colors @("Red", "Yellow") -Cycles 1
+        }
+    }
+    return $choice
+}
+
 function Get-PlaylistMetadata {
     param([string]$Url)
     try {
@@ -1399,8 +1434,9 @@ function Run-InteractiveMode {
         [switch]$ForceOneClick
     )
 
-    $urls = @()
+        $urls = @()
     $usedOneClick = $false
+    $forceNoPlaylistUrls = @{}
     $hasExplicitInputOrConfig = -not [string]::IsNullOrWhiteSpace($LinksFile) -or -not [string]::IsNullOrWhiteSpace($ConfigFile)
     $hasDefaultLinksFile = Test-Path $script:DefaultLinksFile
     $oneClickEnabled = $Settings.oneClickMode -or $ForceOneClick
@@ -1482,19 +1518,30 @@ function Run-InteractiveMode {
 
     # --- Smart playlist detection ---
     # If there's exactly 1 URL and it looks like a playlist, route to playlist mode
-    if ($urls.Count -eq 1 -and (Test-PlaylistUrl -Url $urls[0])) {
-        Show-ProgressUpdate "[+] Playlist URL detected — entering PLAYLIST MODE" -Type "Update"
-        $plResult = Invoke-PlaylistDownload -Settings $Settings -DownloadType $resolvedType -Url $urls[0]
-        if ($plResult) {
-            # Remove from source file on any success
-            if ($plResult.Success -gt 0) {
-                Remove-SuccessfulLinks -FilePath $script:SourceFile -SuccessUrls @($urls[0])
+        if ($urls.Count -eq 1 -and (Test-PlaylistUrl -Url $urls[0])) {
+        $downloadAsPlaylist = $true
+        if (-not $Silent -and (Test-VideoInPlaylistUrl -Url $urls[0])) {
+            $choice = Get-PlaylistChoice -Url $urls[0]
+            if ($choice -eq "2") {
+                $downloadAsPlaylist = $false
+                $forceNoPlaylistUrls[$urls[0]] = $true
             }
-            Show-MissionSummary -SuccessCount $plResult.Success -FailureCount $plResult.Failure -OutputDir $plResult.OutputDir -Silent:$Silent
-            return
         }
-        # If playlist probe failed, fall through to normal single-URL download
-        Show-ProgressUpdate "[~] Falling back to standard download..." -Type "Warning"
+
+        if ($downloadAsPlaylist) {
+            Show-ProgressUpdate "[+] Playlist URL detected - entering PLAYLIST MODE" -Type "Update"
+            $plResult = Invoke-PlaylistDownload -Settings $Settings -DownloadType $resolvedType -Url $urls[0]
+            if ($plResult) {
+                # Remove from source file on any success
+                if ($plResult.Success -gt 0) {
+                    Remove-SuccessfulLinks -FilePath $script:SourceFile -SuccessUrls @($urls[0])
+                }
+                Show-MissionSummary -SuccessCount $plResult.Success -FailureCount $plResult.Failure -OutputDir $plResult.OutputDir -Silent:$Silent
+                return
+            }
+            # If playlist probe failed, fall through to normal single-URL download
+            Show-ProgressUpdate "[~] Falling back to standard download..." -Type "Warning"
+        }
     }
 
     $quality = if ($resolvedType -eq "video") { $Settings.videoQuality } else { "" }
@@ -1509,14 +1556,25 @@ function Run-InteractiveMode {
         $targetNum++
 
         # Check each URL for playlist — handle inline
+                $downloadAsPlaylist = $true
         if ($urls.Count -gt 1 -and (Test-PlaylistUrl -Url $url)) {
-            Show-ProgressUpdate "[+] Playlist detected in batch: $url" -Type "Update"
-            $plResult = Invoke-PlaylistDownload -Settings $Settings -DownloadType $resolvedType -Url $url
-            if ($plResult) {
-                $successCount += $plResult.Success
-                $failureCount += $plResult.Failure
-                if ($plResult.Success -gt 0) { $successUrls += $url }
-                continue
+            if (-not $Silent -and (Test-VideoInPlaylistUrl -Url $url)) {
+                $choice = Get-PlaylistChoice -Url $url
+                if ($choice -eq "2") {
+                    $downloadAsPlaylist = $false
+                    $forceNoPlaylistUrls[$url] = $true
+                }
+            }
+
+            if ($downloadAsPlaylist) {
+                Show-ProgressUpdate "[+] Playlist detected in batch: $url" -Type "Update"
+                $plResult = Invoke-PlaylistDownload -Settings $Settings -DownloadType $resolvedType -Url $url
+                if ($plResult) {
+                    $successCount += $plResult.Success
+                    $failureCount += $plResult.Failure
+                    if ($plResult.Success -gt 0) { $successUrls += $url }
+                    continue
+                }
             }
         }
 
@@ -1526,7 +1584,14 @@ function Run-InteractiveMode {
             Write-Host " >> " -NoNewline -ForegroundColor DarkGray
             Write-Host $url -ForegroundColor White
 
-            $downloadResult = Invoke-YtDlpForUrl -Settings $Settings -DownloadType $resolvedType -OutputDir $outputDir -Url $url
+                        $downloadResult = if ($forceNoPlaylistUrls.ContainsKey($url)) {
+                $customArgs = Get-YtDlpArgs -Settings $Settings -DownloadType $resolvedType -OutputDir $outputDir
+                $customArgs += "--no-playlist"
+                Invoke-YtDlpForUrl -Settings $Settings -DownloadType $resolvedType -OutputDir $outputDir -Url $url -CustomArgs $customArgs
+            }
+            else {
+                Invoke-YtDlpForUrl -Settings $Settings -DownloadType $resolvedType -OutputDir $outputDir -Url $url
+            }
             if ($downloadResult.Success) {
                 $successCount++
                 $successUrls += $url
