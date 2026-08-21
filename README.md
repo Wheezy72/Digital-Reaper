@@ -1,289 +1,166 @@
-🔥 DIGITAL REAPER - YouTube Downloader
+# Digital Reaper
 
-**Custom YouTube/media downloader with style, built for the culture.**
+Custom YouTube/media downloader built by Wheezy.
 
-Made by **Wheezy** 
+Repository: https://github.com/Wheezy72/Digital-Reaper
 
----
+## Features
 
-## ✨ Features
+- High-quality video downloads (720p, 1080p, 1440p, 4K)
+- Audio extraction (MP3, M4A, FLAC)
+- Subtitle support (including auto-generated)
+- Optional HEVC/H.265 output
+- Configurable settings via `settings.json`
+- Auto-update support for `yt-dlp`
+- Batch downloads from `audioLinks.txt` and `videoLinks.txt`
+- JSON manifest/job file support
+- Live download progress (speed and ETA)
+- Optional scheduled automation via `scheduler.bat`
 
-- **🎯 High-Quality Downloads** - 720p, 1080p, 1440p, 4K support
-- **🎵 Audio Extraction** - MP3, M4A, FLAC formats
-- **📝 Subtitle Support** - Multiple languages, auto-generated
-- **🔧 HEVC/H.265** - Better compression, smaller files
-- **⚙️ JSON Settings** - Customizable configuration
-- **🔄 Auto-Updates** - Latest yt-dlp versions
-- **📁 Drag & Drop** - Drop a `.txt` links file or `.json` manifest on the launcher
-- **🎨 Beautiful Interface** - Purple-blue gradient ASCII art
-- **🔒 Clean Directory** - Auto-hides technical files
-- **📊 Live Progress** - Real-time download speed and ETA displayed per file
-- **⏰ Task Scheduler** - Automate downloads on a set interval
-- **⚡ One-Click Flow** - Paste link and download with safe defaults
-- **🛡️ More Robust Downloads** - Resume support, retries, and fallback format
-- **🍪 Optional Browser Cookies** - User-authorized session support when needed
+## Requirements
 
----
+- Windows 10/11 with PowerShell 5.1+ or Linux with PowerShell 7+
+- Internet connection
+- `ffmpeg` and `ffprobe`
+  - Windows: installed by setup
+  - Linux: must already be installed on your system
 
-## 🚀 Quick Start
+## Setup (Run Once)
 
-### 1. One-time engine setup
+### Windows
 
-1. **Download** this repository
-2. **Run setup once (pick your OS):**
-   - **Windows:** `setup.bat`
-   - **Linux:** `./setup.sh`
-   - **PowerShell (any OS):** `setup.ps1`
-3. Setup will:
-   - Create the `engine/` folder
-   - Install **yt-dlp** into `engine/`
-   - On Windows: install **ffmpeg/ffprobe** into `engine/`
-   - On Linux: validate system `ffmpeg`/`ffprobe` are available
-4. (Optional, Windows) **Run** `cleanup.bat` once to hide internal files and keep the folder tidy
+1. Download or clone this repository.
+2. In the project folder, run:
+   - `setup.bat` (double-click), or
+   - `setup.ps1` from PowerShell.
+3. Wait for setup to finish.
+4. Optional: run `cleanup.bat` to hide internal helper files.
 
-After that, your visible root is basically:
+### Linux
 
-- `digitalReaper.bat` (launcher)
-- `settings.json` (config)
-- `audioLinks.txt` / `videoLinks.txt` (optional)
-- `downloads\`
-- `README.md`
+1. Download or clone this repository.
+2. Install prerequisites (`pwsh`, `ffmpeg`, `ffprobe`) if missing.
+3. In the project folder, run:
+   - `chmod +x setup.sh`
+   - `./setup.sh`
+4. Wait for setup to finish.
 
-### 2. Simple batch mode (zero interaction)
+## How to Run
 
-1. Put **audio-only URLs** in `audioLinks.txt` (one per line)
-2. Put **video URLs** in `videoLinks.txt` (one per line)
-3. **Double-click** `digitalReaper.bat`
+### Fastest method (batch files)
 
-Digital Reaper will:
+1. Add audio URLs to `audioLinks.txt` (one URL per line).
+2. Add video URLs to `videoLinks.txt` (one URL per line).
+3. Run `digitalReaper.bat`.
+4. Files are saved under `downloads/audio/` and `downloads/videos/`.
 
-- Auto-detect `audioLinks.txt` / `videoLinks.txt`
-- Download:
-  - audio → `downloads\audio\`
-  - video → `downloads\videos\`
-- Show **live speed and ETA** for every file as it downloads
-- Remove **only** successfully downloaded lines from the text files  
-  (failed URLs stay for the next run)
+### Single job with custom settings (manifest)
 
-### 3. Manifest / job file mode (per-job settings)
+1. Create a JSON file with a `links` array (example: `job.json`).
+2. Add any overrides like `videoQuality`, `useHEVC`, or subtitle settings.
+3. Drag and drop the JSON file onto `digitalReaper.bat`.
 
-1. Create a JSON file, e.g. `job_1080_hevc.json`:
+### Interactive mode
 
-   ```json
-   {
-     "videoQuality": "1080p",
-     "useHEVC": true,
-     "downloadSubtitles": true,
-     "subtitleLanguages": ["en", "en-US"],
-     "outputTemplate": "%(uploader)s/[%(upload_date)s] %(title)s [%(id)s].%(ext)s",
-     "links": [
-       "https://www.youtube.com/watch?v=AAA",
-       "https://youtu.be/BBB"
-     ]
-   }
-   ```
+If no link files or manifest are provided:
 
-2. **Drag** this `.json` file onto `digitalReaper.bat`
+1. Run `digitalReaper.bat`.
+2. Paste a URL when prompted.
+3. Use `settings` or `file` commands if needed.
 
-Digital Reaper will:
+### Scheduled mode (Windows)
 
-- Load the settings from the manifest (overriding defaults where specified)
-- Download all URLs under `links` to the normal `downloads\` folder
+1. Run `scheduler.bat`.
+2. Choose `1` to create/update a schedule.
+3. Select an interval.
+4. Use option `2` to remove the schedule later.
 
-### 4. Interactive mode
+## Configuration
 
-If you run `digitalReaper.bat` with **no** `audioLinks.txt`/`videoLinks.txt` and **no** manifest or links file dropped:
+Edit `settings.json` to control default behavior.
 
-1. Script starts in **one-click mode** by default
-2. Paste a URL and it starts with your default type/quality
-3. Optional commands at prompt:
-   - `settings` → quick settings page
-   - `file` → load URLs from a `.txt` file
-4. Downloads go to `downloads\` (or your custom `outputFolder`)
-5. After completion, choose:
-   - Close terminal
-   - Return to menu
-   - Download another item
+Common settings:
 
----
-
-### 5. Automated / Scheduled mode
-
-Run downloads hands-free on a repeating schedule using a single script — **`scheduler.bat`**:
-
-1. Add your URLs to `audioLinks.txt` / `videoLinks.txt` as normal
-2. **Double-click** `scheduler.bat` — a menu appears:
-
-   ```
-   1 = Schedule  (register / update automated task)
-   2 = Remove    (unregister scheduled task)
-   3 = Run Now   (one silent background run)
-   4 = Status    (check if task is registered)
-   5 = Exit
-   ```
-
-3. Choose **1** and pick an interval:
-   - Every hour / 4 hours / 12 hours
-   - Daily at midnight
-   - Weekly on Sunday at midnight
-
-Digital Reaper registers a Windows Scheduled Task named **DigitalReaper** that silently calls `scheduler.bat /silent` on your chosen schedule.
-
-> **To remove the task:** open `scheduler.bat` → option **2**  
-> **To view/edit it:** open Windows Task Scheduler (`taskschd.msc`)
-
-When running silently in the background, Digital Reaper processes any URLs in `audioLinks.txt` / `videoLinks.txt` and removes them as they succeed — so the lists stay clean between runs.
-
----
-
-## ⚙️ Configuration
-
-Edit `settings.json` to customize behavior.
-
-There are three main entry points:
-
-1. **Global defaults** – `settings.json` at the project root
-2. **Per-job manifest** – any `.json` file you drop on `digitalReaper.bat`  
-   (same shape as `settings.json`, plus a `links` field)
-3. **Batch link files** – `audioLinks.txt` and `videoLinks.txt` in the root
-
-For a description of each setting, see `downloads/settings.txt`.
-
-Extra simple settings added for usability:
-- `oneClickMode` (true/false)
+- `oneClickMode`
 - `defaultDownloadType` (`video` or `audio`)
-- `outputFolder` (blank = default `downloads`)
+- `outputFolder`
 - `cookieSource` (`none`, `chrome`, `edge`, `firefox`)
-- `maxRate` (e.g. `2M`)
-- `concurrentFragments` (recommended `1`)
-- `retryCount` (extractor retries)
-- `outerRetryCount` (per-URL retry attempts)
+- `maxRate`
+- `concurrentFragments`
+- `retryCount`
+- `outerRetryCount`
 
----
+Detailed setting descriptions are in `downloads/settings.txt`.
 
-## 📁 File Structure
+## Project Structure
 
-```
-📁 DigitalReaper/
-├── 📄 setup.bat               (🪟 Windows one-shot setup launcher)
-├── 📄 setup.sh                (🐧 Linux one-shot setup launcher)
-├── 📄 setup.ps1               (⚙️ Cross-platform setup script)
-├── 📄 digitalReaper.bat       (🎯 Main launcher)
-├── 📄 digitalReaper.ps1       (👻 Main PowerShell engine – usually hidden)
-├── 📄 settings.json           (⚙️ Global configuration)
-├── 📄 audioLinks.txt          (🎵 Batch audio URLs – optional)
-├── 📄 videoLinks.txt          (📼 Batch video URLs – optional)
-├── 📄 cleanup.bat             (🧹 Hides internal files for a clean view)
-├── 📄 scheduler.bat           (⏰ Schedule / remove / run / status — all in one)
-├── 📄 README.md               (📖 This file)
-├── 📁 engine/                 (⚙️ Internal binaries)
-│   ├── yt-dlp(.exe)           (Downloader binary)
-│   ├── ffmpeg(.exe)           (Media processing binary)
-│   └── ffprobe(.exe)          (Media probe binary)
-└── 📁 downloads/              (📥 Output folder)
-    ├── audio/                 (Extracted audio)
-    └── videos/                (Video files)
-```
-
-Extra helper:
-- `downloads/settings.txt` – human-readable guide to all `settings.json` options
-
----
-
-## 💡 Usage Examples
-
-### **Single Video:**
-```
-https://youtu.be/xvFZjo5PgG0?si=Nr5n3YLI442ixGDi
+```text
+Digital-Reaper/
+├── setup.bat
+├── setup.sh
+├── setup.ps1
+├── digitalReaper.bat
+├── digitalReaper.ps1
+├── settings.json
+├── audioLinks.txt
+├── videoLinks.txt
+├── cleanup.bat
+├── scheduler.bat
+├── README.md
+├── engine/
+│   ├── yt-dlp(.exe)
+│   ├── ffmpeg(.exe)
+│   └── ffprobe(.exe)
+└── downloads/
+    ├── audio/
+    └── videos/
 ```
 
-### **Playlist:**
-```
-https://youtube.com/playlist?list=PLo_mCdoeO0g9WdS38ko_bpVWPp23DvxPr&si=Nithu0Rq7tLyEO-2
-```
+## Troubleshooting
 
-### **Batch File (videoLinks.txt):**
-```
-Digital Reaper Links
-https://www.youtube.com/watch?v=dQw4w9WgXcQ
-https://www.youtube.com/watch?v=oHg5SJYRHA0
-https://youtu.be/9bZkp7q19f0
-```
+### PowerShell execution policy error
 
----
+Run in PowerShell:
 
-## 🛠️ Requirements
-
-- **Windows 10/11** (PowerShell 5.1+), or **Linux** (PowerShell 7+)
-- **Internet connection** for downloads and updates
-- **ffmpeg + ffprobe** (auto-installed on Windows, system package on Linux)
-- **~200MB free space** for binaries and cache
-
-Linux users: install PowerShell and ffmpeg first, then run `./setup.sh`.
-
----
-
-## 🔧 Troubleshooting
-
-### **"Execution Policy" Error:**
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
-### **Download Fails:**
-- Check URL is valid and accessible
-- Try removing URL parameters (everything after `?`)
-- Ensure stable internet connection
+### Download fails
 
-### **Settings Not Loading:**
-- Verify `settings.json` has valid JSON syntax
-- Use `downloads/settings.txt` for reference
-- Delete `settings.json` to reset to defaults
+- Confirm URL is valid and publicly accessible.
+- Try removing query parameters after `?`.
+- Check internet stability.
 
-### **Scheduled Task Fails:**
-- Run `scheduler.bat` **as Administrator** if task creation is blocked
-- Make sure `audioLinks.txt` / `videoLinks.txt` have URLs in them before the task fires
-- To confirm the task is registered: open Task Scheduler (`taskschd.msc`) and look for **DigitalReaper**
+### Settings do not load
 
----
+- Validate `settings.json` format.
+- Check `downloads/settings.txt` for valid options.
+- Delete `settings.json` to regenerate defaults.
 
-## 🎨 Customization
+### Scheduled task issues
 
-- **Colors:** Modify ASCII gradient in script functions
-- **Output:** Change `outputTemplate` in settings.json
-- **Quality:** Adjust `videoQuality` and `useHEVC` settings
-- **Subtitles:** Configure `subtitleLanguages` array
+- Run `scheduler.bat` as Administrator if task registration fails.
+- Confirm URLs exist in `audioLinks.txt` or `videoLinks.txt`.
+- Check Task Scheduler for `DigitalReaper`.
 
----
+## Contributing
 
-## 🤝 Contributing
+1. Fork the repository.
+2. Create a feature branch.
+3. Commit your changes.
+4. Open a pull request.
 
-1. **Fork** this repository
-2. **Create** feature branch (`git checkout -b feature/amazing-feature`)
-3. **Commit** changes (`git commit -m 'Add amazing feature'`)
-4. **Push** to branch (`git push origin feature/amazing-feature`)
-5. **Open** Pull Request
+## License
 
----
+This project is licensed under the [MIT License](LICENSE).
 
-## 📜 License
+## Acknowledgments
 
-This project is open source and available under the [MIT License](LICENSE).
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+- [FFmpeg](https://ffmpeg.org/)
 
----
+## Support
 
-## 🙏 Acknowledgments
-
-- **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** - Powerful media downloader
-
-- **[FFmpeg](https://ffmpeg.org/)** - Media processing toolkit
-
----
-
-## 📞 Support
-
-https://github.com/Wheezy72
-
----
-
-**Made with 💜 by Wheezy | Harvest responsibly! 🌾**
+- GitHub profile: https://github.com/Wheezy72
+- Repository: https://github.com/Wheezy72/Digital-Reaper
