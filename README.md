@@ -16,6 +16,9 @@ Repository: https://github.com/Wheezy72/Digital-Reaper
 - JSON manifest/job file support
 - Live download progress (speed and ETA)
 - Optional scheduled automation via `scheduler.bat`
+- Playlist mode downloads a whole playlist in one pass, with numbered files and resume
+- Adaptive bot-check handling: failures are classified, then the request changes instead of being retried unchanged
+- Built-in doctor (`digitalReaper.bat /doctor`) checks the engine, the JS runtime, cookies and a live extraction
 
 ## Requirements
 
@@ -24,6 +27,7 @@ Repository: https://github.com/Wheezy72/Digital-Reaper
 - `ffmpeg` and `ffprobe`
   - Windows: installed by setup
   - Linux: must already be installed on your system
+- Optional but recommended: `node` or `deno` on your PATH. Current `yt-dlp` needs a JavaScript runtime for YouTube and silently drops formats without one. Digital Reaper detects either automatically.
 
 ## Setup (Run Once)
 
@@ -60,6 +64,15 @@ Repository: https://github.com/Wheezy72/Digital-Reaper
 2. Add any overrides like `videoQuality`, `useHEVC`, or subtitle settings.
 3. Drag and drop the JSON file onto `digitalReaper.bat`.
 
+### Playlist downloads
+
+Paste or queue a playlist URL like any other link. Digital Reaper reports the playlist, then downloads it in one pass:
+
+- Files are numbered in playlist order (`01 - Title [id].mp4`).
+- Re-running the same playlist only fills the gaps; finished items are skipped.
+- The summary reports what is on disk (`40/40`), so a resumed playlist is not reported as failed.
+- A partially failed playlist keeps its URL in `audioLinks.txt` / `videoLinks.txt`, so the next run retries only the missing items.
+
 ### Interactive mode
 
 If no link files or manifest are provided:
@@ -79,6 +92,8 @@ If no link files or manifest are provided:
 
 Edit `settings.json` to control default behavior.
 
+A fresh clone has no `settings.json` (it is gitignored). Copy `settings.example.json` to `settings.json` first, otherwise the defaults built into the script apply.
+
 Common settings:
 
 - `oneClickMode`
@@ -89,8 +104,32 @@ Common settings:
 - `concurrentFragments`
 - `retryCount`
 - `outerRetryCount`
+- `cookieFile` (path to an exported `cookies.txt`)
+- `playerClients` (pin a player client, e.g. `["mweb"]`; empty means automatic)
+- `jsRuntime` (empty means auto-detect `deno`/`node`)
+- `requestSleep`, `minSleepInterval`, `maxSleepInterval` (pacing)
+- `maxFragmentRetries` (fragment retry cap, default 20)
+- `botCooldownSeconds` (backoff once every fallback client is refused)
+- `downloadArchive` (skip IDs that were already downloaded)
+- `diagnosticsLog` (append failures to `engine/reaper.log`)
 
 Detailed setting descriptions are in `downloads/settings.txt`.
+
+### Bot checks
+
+YouTube sometimes answers a download with "Sign in to confirm you're not a bot". Digital Reaper classifies the failure instead of retrying blindly:
+
+1. The error is classified: bot check, 403, 429, login wall, geo block, missing format, transient or network.
+2. Only failures that can change are retried: a different player client, a longer backoff, then one cooldown.
+3. If every fallback client is refused, the run stops and says that cookies are required.
+4. Two bot checks in one run switch to cautious mode: single-threaded fragments and 10-20 second pauses.
+
+If it keeps happening, give it cookies:
+
+- `cookieFile`: path to an exported `cookies.txt`. Most reliable, and it survives browser cookie-encryption changes.
+- `cookieSource`: `chrome`, `edge` or `firefox` reads cookies straight from that browser.
+
+Failures are written to `engine/reaper.log` when `diagnosticsLog` is on.
 
 ## Project Structure
 
@@ -102,6 +141,7 @@ Digital-Reaper/
 ├── digitalReaper.bat
 ├── digitalReaper.ps1
 ├── settings.json
+├── settings.example.json
 ├── audioLinks.txt
 ├── videoLinks.txt
 ├── cleanup.bat
@@ -117,6 +157,16 @@ Digital-Reaper/
 ```
 
 ## Troubleshooting
+
+### Something looks broken
+
+Run the built-in self-check:
+
+```bat
+digitalReaper.bat /doctor
+```
+
+It checks the engine binaries, `yt-dlp` version and freshness, the JavaScript runtime, cookie configuration, output folder writability, the session lock and a live metadata extraction. It exits with code 1 when a hard check fails, and every `[FAIL]` line says what to fix.
 
 ### PowerShell execution policy error
 

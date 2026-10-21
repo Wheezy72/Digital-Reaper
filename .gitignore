@@ -8,9 +8,22 @@ engine/
 # Downloaded media output
 downloads/
 
+# Subtitle and sidecar files - never commit these, even if one lands in the root
+*.srt
+*.vtt
+*.ass
+*.ssa
+*.sub
+*.lrc
+*.json3
+
+# Local scratch / verification harness
+_scratch/
+
 # VS Code / editor settings
 .vscode/
-# User settings
+
+# User settings (copy settings.example.json to settings.json)
 settings.json
 
 # OS-specific files

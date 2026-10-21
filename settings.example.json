@@ -1,0 +1,31 @@
+{
+    "audioFormat": "mp3",
+    "autoUpdate": true,
+    "botCooldownSeconds": 60,
+    "concurrentFragments": 1,
+    "cookieFile": "",
+    "cookieSource": "none",
+    "defaultDownloadType": "video",
+    "diagnosticsLog": true,
+    "downloadArchive": "",
+    "downloadSubtitles": false,
+    "jsRuntime": "",
+    "maxFragmentRetries": 20,
+    "maxRate": "2M",
+    "maxSleepInterval": 3,
+    "minSleepInterval": 1,
+    "oneClickMode": true,
+    "outerRetryCount": 3,
+    "outputFolder": "",
+    "outputTemplate": "[%(upload_date)s] %(title)s [%(id)s].%(ext)s",
+    "playerClients": [],
+    "requestSleep": 1,
+    "retryCount": 8,
+    "subtitleLanguages": [
+        "en",
+        "en-US"
+    ],
+    "useHEVC": true,
+    "userAgent": "",
+    "videoQuality": "1080p"
+}

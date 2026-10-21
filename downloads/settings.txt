@@ -52,6 +52,27 @@ cookieSource:
 - "edge"    = Use signed-in Edge session (user-authorized)
 - "firefox" = Use signed-in Firefox session (user-authorized)
 
+cookieFile:
+- ""                              = Use cookieSource, or no cookies at all
+- "C:\\Users\\You\\cookies.txt"  = Use an exported cookies.txt file
+- Takes priority over cookieSource, and survives Chrome's encrypted cookie store
+- Export one with any browser extension that writes the Netscape cookie format
+
+jsRuntime:
+- ""        = Auto-detect deno/node on PATH and pass it to yt-dlp
+- "node"    = Force a runtime by name
+- Newer yt-dlp needs a JS runtime to solve YouTube challenges; without one it
+  warns and silently drops formats, which looks like a bot check
+
+userAgent:
+- ""              = Let yt-dlp send the UA that matches its player client (recommended)
+- "Mozilla/..."   = Only pin one if you know the UA the site expects
+- Note: a random browser UA is a bot-check trigger, not a fix
+
+playerClients:
+- []         = yt-dlp's default order, with automatic fallback after a bot check
+- ["mweb"]   = Pin one player client; fallbacks still apply if it gets refused
+
 maxRate:
 - "2M" = Safer default rate (helps reduce throttling failures)
 - ""   = No explicit rate limit
@@ -66,8 +87,35 @@ retryCount:
 
 outerRetryCount:
 - 3 = How many times Digital Reaper retries a full URL before fallback/fail
+- Retries only happen when the failure class allows it (bot check, 403, 429,
+  network). Login walls, geo blocks and removed videos are not retried.
+
+requestSleep:
+- 1 = Seconds between HTTP requests (raise it if you get checked often)
+
+minSleepInterval / maxSleepInterval:
+- 1 / 3 = Random pause between downloads
+- Cautious mode (2+ bot checks in one run) forces 10 / 20
+
+maxFragmentRetries:
+- 20 = Give up on a dead fragment instead of retrying forever
+- "infinite" used to hang scheduled runs for hours
+
+botCooldownSeconds:
+- 60 = Back off this long once every fallback player client has been refused
+- Minimum enforced value is 15
+
+downloadArchive:
+- ""                     = Disabled
+- "engine\\archive.txt"  = Skip IDs that were already downloaded (scheduled runs)
+
+diagnosticsLog:
+- true  = Append failure class + URL to engine\\reaper.log (rotated at 1 MB)
+- false = No log file
 
 TIPS:
+- A tracked copy of a working config lives in settings.example.json
+- settings.json itself is gitignored, so copy the example and edit your copy
 - Restart Digital Reaper after changing settings
 - Keep backup of working settings.json
 - Use "video" + "1080p" for best quality/size balance

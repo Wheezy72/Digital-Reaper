@@ -2,6 +2,9 @@
 title DIGITAL REAPER - YouTube Harvester
 color 07
 
+REM /doctor runs the diagnostics pass, then pauses so the window stays readable
+if /I "%~1"=="/doctor" goto :DOCTOR
+
 echo ===============================================
 echo        DIGITAL REAPER - INITIALIZING
 echo ===============================================
@@ -20,3 +23,10 @@ if "%~1" neq "" (
     echo [+] Starting DIGITAL REAPER in interactive mode...
     powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0digitalReaper.ps1"
 )
+exit /b
+
+:DOCTOR
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0digitalReaper.ps1" -Doctor -Silent
+set "DOCTOR_RC=%errorlevel%"
+pause
+exit /b %DOCTOR_RC%
