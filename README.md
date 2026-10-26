@@ -168,6 +168,12 @@ digitalReaper.bat /doctor
 
 It checks the engine binaries, `yt-dlp` version and freshness, the JavaScript runtime, cookie configuration, output folder writability, the session lock and a live metadata extraction. It exits with code 1 when a hard check fails, and every `[FAIL]` line says what to fix.
 
+### "Another instance is already running"
+
+Digital Reaper writes `engine/reaper.lock` while it runs, so a scheduled task cannot start in the middle of a manual download. If a window was closed abruptly the lock can survive, but it is cleared automatically once the process that wrote it is gone (a recycled process ID is no longer mistaken for a running instance).
+
+If it still blocks and no other window is open, delete `engine/reaper.lock` and start again.
+
 ### PowerShell execution policy error
 
 Run in PowerShell:

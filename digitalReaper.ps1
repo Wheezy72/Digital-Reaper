@@ -1682,8 +1682,10 @@ function Invoke-YtDlpCaptureOutput {
     }
 }
 
-# A crashed run used to leave engine/reaper.lock behind and block every later
-# scheduled run, so the lock is now validated against a live PID.
+# A crashed run (or a closed window) leaves engine/reaper.lock behind, so the lock
+# has to be validated before it is trusted. "Is that PID alive" is NOT enough:
+# Windows recycles PIDs, and a recycled number belonging to some unrelated app used
+# to look like a running instance and block every launch.
 function Test-StaleReaperLock {
     if (-not (Test-Path $script:LockFilePath)) { return $true }
 
@@ -1697,7 +1699,34 @@ function Test-StaleReaperLock {
     if ($lockPid -le 0) { return $true }
 
     $owner = Get-Process -Id $lockPid -ErrorAction SilentlyContinue
-    return ($null -eq $owner)
+    if ($null -eq $owner) { return $true }
+
+    $lockWritten = $null
+    try {
+        $lockWritten = (Get-Item $script:LockFilePath -Force).LastWriteTime
+    }
+    catch {
+        $lockWritten = $null
+    }
+
+    if ($null -ne $lockWritten) {
+        try {
+            # The real owner was already running when it wrote the lock. A process
+            # that started afterwards cannot be it - that is a recycled PID.
+            if ($owner.StartTime -gt $lockWritten.AddSeconds(10)) { return $true }
+            return $false
+        }
+        catch {
+            # StartTime can be unreadable for protected processes; fall through to age.
+        }
+    }
+
+    # Last resort: never let an abandoned lock block forever.
+    if ($null -ne $lockWritten) {
+        $age = (Get-Date) - $lockWritten
+        if ($age.TotalHours -gt 12) { return $true }
+    }
+    return $false
 }
 
 # ===================================================================
@@ -2429,7 +2458,10 @@ try {
 
     # One session lock for every mode (batch, interactive, scheduled).
     if (-not (Enter-ReaperLock)) {
-        Show-ProgressUpdate "[!] Another instance of Digital Reaper is already running (lock file present). Exiting." -Type "Warning"
+        $holder = ""
+        try { $holder = ([string](Get-Content $script:LockFilePath -Raw -ErrorAction SilentlyContinue)).Trim() } catch { }
+        Show-ProgressUpdate "[!] Another instance is already running (pid $holder). Exiting." -Type "Warning"
+        Show-ProgressUpdate "    If no other window is open, delete engine\reaper.lock and start again." -Type "Warning"
         if (-not $Silent) { Read-Host "Press Enter to exit..." }
         exit 1
     }
