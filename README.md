@@ -66,9 +66,9 @@ Repository: https://github.com/Wheezy72/Digital-Reaper
 
 ### Playlist downloads
 
-Paste or queue a playlist URL like any other link. Digital Reaper reports the playlist, then downloads it in one pass:
+Paste or queue a playlist URL like any other link - in `audioLinks.txt` / `videoLinks.txt`, in a manifest `links` array, or typed interactively. A single playlist URL is enough; it no longer has to be mixed with other links. Digital Reaper reports the playlist, then downloads it in one pass:
 
-- Files are numbered in playlist order (`01 - Title [id].mp4`).
+- Files are numbered in playlist order (`01 - Title [id].mp4`), inside a folder named after the playlist.
 - Re-running the same playlist only fills the gaps; finished items are skipped.
 - The summary reports what is on disk (`40/40`), so a resumed playlist is not reported as failed.
 - A partially failed playlist keeps its URL in `audioLinks.txt` / `videoLinks.txt`, so the next run retries only the missing items.
@@ -87,6 +87,7 @@ If no link files or manifest are provided:
 2. Choose `1` to create/update a schedule.
 3. Select an interval.
 4. Use option `2` to remove the schedule later.
+5. Use option `3` to start one silent background pass right away.
 
 ## Configuration
 
@@ -120,7 +121,7 @@ Detailed setting descriptions are in `downloads/settings.txt`.
 YouTube sometimes answers a download with "Sign in to confirm you're not a bot". Digital Reaper classifies the failure instead of retrying blindly:
 
 1. The error is classified: bot check, 403, 429, login wall, geo block, missing format, transient or network.
-2. Only failures that can change are retried: a different player client, a longer backoff, then one cooldown.
+2. Only failures that can change are retried: a different player client, a longer backoff, then one cooldown. A quality that is not offered is retried with backoff only, because it is not a bot signal and should not push the whole run into cautious mode.
 3. If every fallback client is refused, the run stops and says that cookies are required.
 4. Two bot checks in one run switch to cautious mode: single-threaded fragments and 10-20 second pauses.
 
@@ -166,7 +167,7 @@ Run the built-in self-check:
 digitalReaper.bat /doctor
 ```
 
-It checks the engine binaries, `yt-dlp` version and freshness, the JavaScript runtime, cookie configuration, output folder writability, the session lock and a live metadata extraction. It exits with code 1 when a hard check fails, and every `[FAIL]` line says what to fix.
+It checks the engine binaries, `yt-dlp` version and freshness, the JavaScript runtime, cookie configuration, output folder writability, the session lock and a live metadata extraction. The live extraction uses the same cookies, player client and JavaScript runtime as a real download, so a pass here reflects what downloads will actually do. It exits with code 1 when a hard check fails, and every `[FAIL]` line says what to fix.
 
 ### "Another instance is already running"
 

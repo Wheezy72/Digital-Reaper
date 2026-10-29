@@ -172,7 +172,9 @@ echo  RUNNING NOW (background / no window)
 echo ----------------------------------------------------------------
 echo.
 echo [INFO] Launching Digital Reaper silently...
-powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SCRIPT_DIR%digitalReaper.ps1"
+REM -Silent is required: without it the hidden window blocks on the "what next?"
+REM prompt and keeps holding the session lock until the task is killed.
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SCRIPT_DIR%digitalReaper.ps1" -Silent
 echo [INFO] Done.
 echo.
 pause
