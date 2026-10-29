@@ -89,6 +89,8 @@ If no link files or manifest are provided:
 4. Use option `2` to remove the schedule later.
 5. Use option `3` to start one silent background pass right away.
 
+The task is registered with PowerShell 7 when it is installed (full path, because a scheduled task does not inherit the PATH of the window that created it) and with Windows PowerShell otherwise. Re-run option `1` after installing or removing `pwsh` so the task picks up the current engine.
+
 ## Configuration
 
 Edit `settings.json` to control default behavior.

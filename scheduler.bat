@@ -6,6 +6,15 @@ color 07
 set "TASK_NAME=DigitalReaper"
 set "SCRIPT_DIR=%~dp0"
 
+REM Match digitalReaper.bat: PowerShell 7 when it is installed, Windows PowerShell
+REM otherwise. The task gets the resolved full path because a scheduled task does
+REM not inherit the PATH this window happens to have.
+set "PSEXE=powershell.exe"
+set "PSEXE7="
+if exist "%ProgramFiles%\PowerShell\7\pwsh.exe" set "PSEXE7=%ProgramFiles%\PowerShell\7\pwsh.exe"
+if not defined PSEXE7 for /f "delims=" %%I in ('where pwsh.exe 2^>nul') do if not defined PSEXE7 set "PSEXE7=%%I"
+if defined PSEXE7 set "PSEXE=!PSEXE7!"
+
 :MENU
 cls
 echo ================================================================
@@ -98,13 +107,14 @@ if "%CHOICE%"=="1" (
 )
 
 REM Register the task to call PowerShell directly — avoids a CMD window flash on every run
-schtasks /create /tn "%TASK_NAME%" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%SCRIPT_DIR%digitalReaper.ps1\" -Silent" %SCHEDULE_ARGS% /ru %USERNAME% /rl HIGHEST /f >nul 2>&1
+schtasks /create /tn "%TASK_NAME%" /tr "\"!PSEXE!\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%SCRIPT_DIR%digitalReaper.ps1\" -Silent" %SCHEDULE_ARGS% /ru %USERNAME% /rl HIGHEST /f >nul 2>&1
 
 if %errorlevel% equ 0 (
     echo.
     echo ================================================================
     echo  [+] Task "%TASK_NAME%" registered successfully!
     echo      Schedule : !SCHEDULE_DESC!
+    echo      Engine   : !PSEXE!
     echo ================================================================
     echo.
     echo  To view or edit: open Task Scheduler (taskschd.msc)
@@ -163,7 +173,7 @@ REM  3 - RUN NOW  (also called silently by the scheduled task)
 REM ================================================================
 :RUN_NOW
 if /I "%1"=="/silent" (
-    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SCRIPT_DIR%digitalReaper.ps1" -Silent
+    "!PSEXE!" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SCRIPT_DIR%digitalReaper.ps1" -Silent
     exit /b
 )
 echo.
@@ -174,7 +184,7 @@ echo.
 echo [INFO] Launching Digital Reaper silently...
 REM -Silent is required: without it the hidden window blocks on the "what next?"
 REM prompt and keeps holding the session lock until the task is killed.
-powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SCRIPT_DIR%digitalReaper.ps1" -Silent
+"!PSEXE!" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SCRIPT_DIR%digitalReaper.ps1" -Silent
 echo [INFO] Done.
 echo.
 pause
@@ -188,6 +198,8 @@ echo.
 echo ----------------------------------------------------------------
 echo  TASK STATUS
 echo ----------------------------------------------------------------
+echo.
+echo  Engine : !PSEXE!  (used for new registrations and Run Now)
 echo.
 schtasks /query /tn "%TASK_NAME%" /fo LIST 2>nul
 if %errorlevel% neq 0 (
