@@ -217,7 +217,7 @@ function Show-ItemResult {
         Write-Line -Text $Detail -Color $(if ($ok) { "DarkGray" } else { "Yellow" })
     }
     elseif ($Warnings -gt 0) {
-        Write-Line -Text ("$Warnings warning(s) during download") -Color "DarkGray"
+        Write-Line -Text ("$Warnings warning(s) - logged to engine\reaper.log") -Color "DarkGray"
     }
     else {
         Write-Host ""
@@ -227,9 +227,9 @@ function Show-ItemResult {
 function Get-RecentFileBytes {
     param([string]$Path, [datetime]$Since)
 
-    if (-not (Test-Path $Path)) { return 0 }
+    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
     $total = 0
-    foreach ($file in (Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue)) {
+    foreach ($file in (Get-ChildItem -LiteralPath $Path -Recurse -File -ErrorAction SilentlyContinue)) {
         if ($file.LastWriteTime -ge $Since) { $total += $file.Length }
     }
     return $total
@@ -368,9 +368,10 @@ function Show-MenuOption {
 
 function Ensure-Directory {
     param([string]$Path)
-    if (-not (Test-Path $Path)) {
-        New-Item -Path $Path -ItemType Directory -Force | Out-Null
-    }
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    # .NET, not Test-Path/New-Item: those read [ ] in a folder name as a wildcard,
+    # so a playlist titled "[Official] Mix" silently matched nothing.
+    [void][System.IO.Directory]::CreateDirectory($Path)
 }
 
 function Show-DownloadBanner {
@@ -1073,6 +1074,7 @@ function Get-PlaylistMetadata {
         if ($data.entries) { $entries = @($data.entries) }
         return [pscustomobject]@{
             Title      = $title
+            PlaylistId = [string]$data.id
             EntryCount = $entries.Count
         }
     }
@@ -1113,7 +1115,26 @@ function Invoke-PlaylistDownload {
 
     $safeName = Get-SafeFolderName -Name $meta.Title
     $baseDir = Get-OutputDirForType -Settings $Settings -DownloadType $DownloadType
-    $playlistDir = Join-Path $baseDir $safeName
+
+    # Two playlists can share a title ("Music", "Favorites"), so a new folder
+    # carries the playlist ID and cannot merge with another one. A folder created
+    # before the ID was added is reused as-is, otherwise every existing playlist
+    # would re-download into a fresh folder once.
+    $legacyDir = Join-Path $baseDir $safeName
+    $playlistDir = $legacyDir
+    if ($meta.PlaylistId) {
+        # Parentheses, not brackets: [ ] in a folder name are PowerShell wildcards.
+        $idTag = " (" + (Get-SafeFolderName -Name $meta.PlaylistId) + ")"
+        $budget = 80 - $idTag.Length
+        if ($safeName.Length -gt $budget) {
+            $cut = $safeName.Substring(0, [Math]::Max(1, $budget))
+            $space = $cut.LastIndexOf(" ")
+            if ($space -gt 0) { $cut = $cut.Substring(0, $space) }
+            $safeName = $cut.Trim()
+        }
+        $idDir = Join-Path $baseDir ($safeName + $idTag)
+        if (-not (Test-Path -LiteralPath $idDir) -and (Test-Path -LiteralPath $legacyDir)) { $playlistDir = $legacyDir } else { $playlistDir = $idDir }
+    }
     Ensure-Directory -Path $playlistDir
 
     Write-Host ""
@@ -1140,7 +1161,7 @@ function Invoke-PlaylistDownload {
     # Report the state of the folder rather than the exit code: that survives a
     # resume, and "does this playlist exist locally" is the real question.
     $mediaExtensions = @(".mp4", ".mkv", ".webm", ".mp3", ".m4a", ".flac", ".opus", ".ogg", ".wav")
-    $present = @(Get-ChildItem -Path $playlistDir -File -ErrorAction SilentlyContinue |
+    $present = @(Get-ChildItem -LiteralPath $playlistDir -File -ErrorAction SilentlyContinue |
         Where-Object { $mediaExtensions -contains $_.Extension.ToLower() })
     $newThisRun = @($present | Where-Object { $_.LastWriteTime -ge $startedAt })
     $missing = [Math]::Max(0, $meta.EntryCount - $present.Count)
@@ -1205,7 +1226,7 @@ function Get-YtDlpArgs {
     # Capped instead of infinite: an unbounded fragment retry lets a scheduled
     # silent run hang for hours on a dead stream.
     $ytDlpArgs.Add("--fragment-retries")
-    $ytDlpArgs.Add((Get-InvariantNumber -Value $Settings.maxFragmentRetries -Default 20))
+    $ytDlpArgs.Add((Format-InvariantNumber -Value $Settings.maxFragmentRetries -Default 20))
     $ytDlpArgs.Add("--retry-sleep")
     $ytDlpArgs.Add("fragment:exp=1:30")
     $ytDlpArgs.Add("--console-title")
@@ -1221,7 +1242,7 @@ function Get-YtDlpArgs {
     # Cautious mode (entered after repeated bot checks) downloads single-threaded.
     $fragments = 1
     if (-not (Test-BotGuardCautious)) {
-        $configuredFragments = [int](Get-InvariantNumber -Value $Settings.concurrentFragments -Default 1)
+        $configuredFragments = [int](Format-InvariantNumber -Value $Settings.concurrentFragments -Default 1)
         if ($configuredFragments -gt 1) { $fragments = $configuredFragments }
     }
     $ytDlpArgs.Add("--concurrent-fragments")
@@ -1290,7 +1311,9 @@ function Get-YtDlpArgs {
     return $ytDlpArgs
 }
 
-function Get-InvariantNumber {
+# Returns a culture-invariant *string* for yt-dlp's argument list. The name says
+# "format", not "get": a caller that needs arithmetic has to cast it first.
+function Format-InvariantNumber {
     param($Value, [double]$Default = 0)
     $result = $Default
     $rawValue = [string]$Value
@@ -1326,8 +1349,10 @@ function Reset-BotGuard {
 
     $script:BotGuard = @{
         Chain                = @(Get-BotGuardChain -Settings $Settings)
+        StartIndex           = $startIndex
         Index                = $startIndex
         ConsecutiveBotChecks = 0
+        ConsecutiveSuccesses = 0
         Cautious             = $false
         CooledDown           = $false
     }
@@ -1336,6 +1361,20 @@ function Reset-BotGuard {
 function Test-BotGuardCautious {
     if (-not $script:BotGuard) { return $false }
     return [bool]$script:BotGuard.Cautious
+}
+
+# A clean download proves the network is usable again, so penalties earned by an
+# earlier video must not follow the rest of the run. The old code cleared only the
+# consecutive-check counter, which left cautious mode and the escalated player
+# client switched on forever - one unlucky video slowed every later download.
+function Register-BotGuardSuccess {
+    if (-not $script:BotGuard) { return }
+    $script:BotGuard.ConsecutiveBotChecks = 0
+    $script:BotGuard.ConsecutiveSuccesses++
+    if ($script:BotGuard.ConsecutiveSuccesses -lt 2) { return }
+    $script:BotGuard.Cautious = $false
+    $script:BotGuard.CooledDown = $false
+    $script:BotGuard.Index = $script:BotGuard.StartIndex
 }
 
 function Get-ActivePlayerClient {
@@ -1355,6 +1394,7 @@ function Step-BotGuard {
 
     if (-not $script:BotGuard) { Reset-BotGuard -Settings $Settings }
     $script:BotGuard.ConsecutiveBotChecks++
+    $script:BotGuard.ConsecutiveSuccesses = 0
 
     # Two hits anywhere in the session mean this network looks suspicious.
     if ($script:BotGuard.ConsecutiveBotChecks -ge 2) { $script:BotGuard.Cautious = $true }
@@ -1371,7 +1411,7 @@ function Step-BotGuard {
 
     if (-not $script:BotGuard.CooledDown) {
         $script:BotGuard.CooledDown = $true
-        $coolDown = [int](Get-InvariantNumber -Value $Settings.botCooldownSeconds -Default 60)
+        $coolDown = [int](Format-InvariantNumber -Value $Settings.botCooldownSeconds -Default 60)
         if ($coolDown -lt 15) { $coolDown = 15 }
         return [pscustomobject]@{
             CanRetry = $true
@@ -1470,10 +1510,10 @@ function Get-StealthArgs {
     }
 
     $stealthArgs.Add("--sleep-requests")
-    $stealthArgs.Add((Get-InvariantNumber -Value $Settings.requestSleep -Default 1))
+    $stealthArgs.Add((Format-InvariantNumber -Value $Settings.requestSleep -Default 1))
 
-    $minSleep = Get-InvariantNumber -Value $Settings.minSleepInterval -Default 1
-    $maxSleep = Get-InvariantNumber -Value $Settings.maxSleepInterval -Default 3
+    $minSleep = Format-InvariantNumber -Value $Settings.minSleepInterval -Default 1
+    $maxSleep = Format-InvariantNumber -Value $Settings.maxSleepInterval -Default 3
     if (Test-BotGuardCautious) {
         $minSleep = "10"
         $maxSleep = "20"
@@ -1548,6 +1588,19 @@ function Get-BackoffDelay {
     return [int][Math]::Round($delay)
 }
 
+# Warnings are counted in the UI, so the first one is worth keeping. Without this
+# the "warning(s)" text pointed at a log that never contained any.
+function Write-WarningLog {
+    param([string]$Url, [string]$WarningText, [int]$Count, [hashtable]$Settings)
+    if ($Count -le 0 -or [string]::IsNullOrWhiteSpace($WarningText)) { return }
+    $first = ""
+    foreach ($line in ($WarningText -split "`r?`n")) {
+        if ($line -match 'WARNING') { $first = $line.Trim(); break }
+    }
+    if ($first.Length -gt 200) { $first = $first.Substring(0, 200).TrimEnd() + "..." }
+    Write-ReaperLog -Settings $Settings -Message "warnings($Count) $Url :: $first"
+}
+
 function Write-ReaperLog {
     param([string]$Message, [hashtable]$Settings)
     if (-not $Settings -or -not $Settings.diagnosticsLog) { return }
@@ -1585,7 +1638,7 @@ function Invoke-YtDlpForUrl {
         [string[]]$ExtraArgs = @()
     )
 
-    $maxAttempts = [int](Get-InvariantNumber -Value $Settings.outerRetryCount -Default $script:DefaultOuterRetryCount)
+    $maxAttempts = [int](Format-InvariantNumber -Value $Settings.outerRetryCount -Default $script:DefaultOuterRetryCount)
     if ($maxAttempts -lt 1) { $maxAttempts = 1 }
     if ($maxAttempts -gt 10) { $maxAttempts = 10 }
 
@@ -1608,8 +1661,9 @@ function Invoke-YtDlpForUrl {
 
         $attemptResult = Invoke-YtDlpAndCapture -YtDlpArgs $ytArgs.ToArray()
         if ($attemptResult.Success) {
-            if ($script:BotGuard) { $script:BotGuard.ConsecutiveBotChecks = 0 }
+            Register-BotGuardSuccess
             $warningCount = ([regex]::Matches([string]$attemptResult.ErrorText, '(?m)^\s*WARNING')).Count
+            Write-WarningLog -Url $Url -WarningText ([string]$attemptResult.ErrorText) -Count $warningCount -Settings $Settings
             return [pscustomobject]@{
                 Success   = $true
                 ErrorText = [string]$attemptResult.ErrorText
@@ -1656,8 +1710,9 @@ function Invoke-YtDlpForUrl {
 
         $fallbackResult = Invoke-YtDlpAndCapture -YtDlpArgs $fallbackArgs.ToArray()
         if ($fallbackResult.Success) {
-            if ($script:BotGuard) { $script:BotGuard.ConsecutiveBotChecks = 0 }
+            Register-BotGuardSuccess
             $warningCount = ([regex]::Matches([string]$fallbackResult.ErrorText, '(?m)^\s*WARNING')).Count
+            Write-WarningLog -Url $Url -WarningText ([string]$fallbackResult.ErrorText) -Count $warningCount -Settings $Settings
             return [pscustomobject]@{
                 Success   = $true
                 ErrorText = [string]$fallbackResult.ErrorText
@@ -1785,10 +1840,23 @@ function Enter-ReaperLock {
         }
     }
 
+    # CreateNew makes "someone else got here first" atomic. A plain Test-Path
+    # followed by Set-Content let two launches in the same second both believe
+    # they owned the lock, and both then wrote over each other's PID.
     try {
-        Set-Content -Path $script:LockFilePath -Value $PID
+        $stream = [System.IO.File]::Open($script:LockFilePath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]$PID)
+            $stream.Write($bytes, 0, $bytes.Length)
+        }
+        finally {
+            $stream.Dispose()
+        }
         Set-HiddenAttribute -Path $script:LockFilePath
         return $true
+    }
+    catch [System.IO.IOException] {
+        return $false
     }
     catch {
         # Never block a download because the lock file could not be written.
@@ -2091,8 +2159,11 @@ function Remove-SuccessfulLinks {
         [string]$FilePath,
         [string[]]$SuccessUrls
     )
-    if (-not $FilePath -or -not (Test-Path $FilePath) -or -not $SuccessUrls -or $SuccessUrls.Count -eq 0) { return }
-    $allLines = @(Get-Content $FilePath)
+    if (-not $FilePath -or -not (Test-Path -LiteralPath $FilePath) -or -not $SuccessUrls -or $SuccessUrls.Count -eq 0) { return }
+    # Read raw and write UTF-8 so a link file with non-ASCII comments survives the
+    # rewrite instead of coming back as ANSI mojibake. LiteralPath because a
+    # user-chosen folder such as "Downloads [old]" would otherwise be a wildcard.
+    $allLines = @([string](Get-Content -LiteralPath $FilePath -Raw) -split "`r?`n")
     $linesOut = New-Object System.Collections.Generic.List[string]
     foreach ($line in $allLines) {
         if (Test-ValidUrl -Line $line) {
@@ -2105,7 +2176,7 @@ function Remove-SuccessfulLinks {
             $linesOut.Add($line)
         }
     }
-    Set-Content -Path $FilePath -Value $linesOut.ToArray()
+    Set-Content -LiteralPath $FilePath -Value $linesOut.ToArray() -Encoding UTF8
 }
 
 function Show-MissionSummary {
@@ -2215,6 +2286,10 @@ function Run-BatchMode {
     $summaryDir = Get-BaseOutputDir -Settings $Settings
     Show-MissionSummary -SuccessCount $batchSuccess -FailureCount $batchFailure -OutputDir $summaryDir `
         -Failures $batchFailures -TotalBytes $batchBytes -Elapsed ((Get-Date) - $startedAt)
+
+    # Scheduled runs report into a hidden window, so leave one line behind that
+    # says whether last night's pass actually did anything.
+    Write-ReaperLog -Settings $Settings -Message "batch run: $batchSuccess ok, $batchFailure failed"
 }
 
 function Run-InteractiveMode {
@@ -2222,6 +2297,11 @@ function Run-InteractiveMode {
         [hashtable]$Settings,
         [switch]$ForceOneClick
     )
+
+    # Only a file-based run has a link file to clean up afterwards. Without this
+    # reset, a URL typed in a later menu round could be removed from whichever
+    # file the previous round happened to use.
+    $script:SourceFile = ""
 
     $urls = @()
     $usedOneClick = $false
@@ -2334,6 +2414,7 @@ function Run-InteractiveMode {
                     Remove-SuccessfulLinks -FilePath $script:SourceFile -SuccessUrls @($urls[0])
                 }
                 Show-MissionSummary -SuccessCount $plResult.Success -FailureCount $plResult.Failure -OutputDir $plResult.OutputDir
+                Write-ReaperLog -Settings $Settings -Message "playlist run: $($plResult.Success) ok, $($plResult.Failure) failed :: $($plResult.OutputDir)"
                 return
             }
             # If playlist probe failed, fall through to normal single-URL download
@@ -2414,6 +2495,8 @@ function Run-InteractiveMode {
 
     Show-MissionSummary -SuccessCount $successCount -FailureCount $failureCount -OutputDir $outputDir `
         -Failures $failures -TotalBytes (Get-RecentFileBytes -Path $outputDir -Since $startedAt) -Elapsed ((Get-Date) - $startedAt)
+
+    Write-ReaperLog -Settings $Settings -Message "run: $successCount ok, $failureCount failed :: $outputDir"
 }
 
 function Show-ExitPrompt {
@@ -2563,8 +2646,8 @@ function Invoke-Doctor {
     try {
         Ensure-Directory -Path $targetDir
         $probeFile = Join-Path $targetDir ".doctor-write-test"
-        Set-Content -Path $probeFile -Value "ok" -ErrorAction Stop
-        Remove-Item -Path $probeFile -Force -ErrorAction SilentlyContinue
+        Set-Content -LiteralPath $probeFile -Value "ok" -ErrorAction Stop
+        Remove-Item -LiteralPath $probeFile -Force -ErrorAction SilentlyContinue
         Write-DoctorLine "OK" "output folder" $targetDir
     }
     catch {

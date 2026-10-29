@@ -68,7 +68,7 @@ Repository: https://github.com/Wheezy72/Digital-Reaper
 
 Paste or queue a playlist URL like any other link - in `audioLinks.txt` / `videoLinks.txt`, in a manifest `links` array, or typed interactively. A single playlist URL is enough; it no longer has to be mixed with other links. Digital Reaper reports the playlist, then downloads it in one pass:
 
-- Files are numbered in playlist order (`01 - Title [id].mp4`), inside a folder named after the playlist.
+- Files are numbered in playlist order (`01 - Title [id].mp4`), inside a folder named after the playlist plus its ID, so two playlists with the same title never share a folder.
 - Re-running the same playlist only fills the gaps; finished items are skipped.
 - The summary reports what is on disk (`40/40`), so a resumed playlist is not reported as failed.
 - A partially failed playlist keeps its URL in `audioLinks.txt` / `videoLinks.txt`, so the next run retries only the missing items.
@@ -101,7 +101,7 @@ Common settings:
 - `defaultDownloadType` (`video` or `audio`)
 - `outputFolder`
 - `cookieSource` (`none`, `chrome`, `edge`, `firefox`)
-- `maxRate`
+- `maxRate` (default `2M` is roughly 16 Mbit/s; set it to `""` to drop the cap)
 - `concurrentFragments`
 - `retryCount`
 - `outerRetryCount`
@@ -123,14 +123,14 @@ YouTube sometimes answers a download with "Sign in to confirm you're not a bot".
 1. The error is classified: bot check, 403, 429, login wall, geo block, missing format, transient or network.
 2. Only failures that can change are retried: a different player client, a longer backoff, then one cooldown. A quality that is not offered is retried with backoff only, because it is not a bot signal and should not push the whole run into cautious mode.
 3. If every fallback client is refused, the run stops and says that cookies are required.
-4. Two bot checks in one run switch to cautious mode: single-threaded fragments and 10-20 second pauses.
+4. Two bot checks in one run switch to cautious mode: single-threaded fragments and 10-20 second pauses. Two clean downloads in a row clear it again, so one bad video does not slow down the rest of the run.
 
 If it keeps happening, give it cookies:
 
 - `cookieFile`: path to an exported `cookies.txt`. Most reliable, and it survives browser cookie-encryption changes.
 - `cookieSource`: `chrome`, `edge` or `firefox` reads cookies straight from that browser.
 
-Failures are written to `engine/reaper.log` when `diagnosticsLog` is on.
+Failures are written to `engine/reaper.log` when `diagnosticsLog` is on, together with the first warning of any download that had them and a one-line `run:` / `batch run:` / `playlist run:` summary, which is how a silent scheduled pass reports back.
 
 ## Project Structure
 
