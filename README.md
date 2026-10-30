@@ -45,30 +45,34 @@ Repository: https://github.com/Wheezy72/Digital-Reaper
 1. Download or clone this repository.
 2. Install prerequisites (`pwsh`, `ffmpeg`, `ffprobe`) if missing.
 3. In the project folder, run:
-   - `chmod +x setup.sh`
+   - `chmod +x setup.sh digitalReaper.sh`
    - `./setup.sh`
 4. Wait for setup to finish.
 
+`yt-dlp` is downloaded into `engine/` and marked executable by setup. `ffmpeg` and `ffprobe` come from your distribution and are picked up from `PATH`; there is nothing to copy into `engine/`. On ARM (Raspberry Pi, ARM servers) the matching `yt-dlp` build is chosen automatically.
+
 ## How to Run
 
-### Fastest method (batch files)
+### Fastest method (link files)
 
 1. Add audio URLs to `audioLinks.txt` (one URL per line).
 2. Add video URLs to `videoLinks.txt` (one URL per line).
-3. Run `digitalReaper.bat`.
+3. Run `digitalReaper.bat` (Windows) or `./digitalReaper.sh` (Linux).
 4. Files are saved under `downloads/audio/` and `downloads/videos/`.
+
+Both launchers also accept a file path, so `digitalReaper.bat job.json` and `./digitalReaper.sh job.json` run a manifest directly.
 
 ### Single job with custom settings (manifest)
 
 1. Create a JSON file with a `links` array (example: `job.json`).
 2. Add any overrides like `videoQuality`, `useHEVC`, or subtitle settings.
-3. Drag and drop the JSON file onto `digitalReaper.bat`.
+3. Drag and drop the JSON file onto `digitalReaper.bat`, or pass it to `./digitalReaper.sh`.
 
 ### Playlist downloads
 
 Paste or queue a playlist URL like any other link - in `audioLinks.txt` / `videoLinks.txt`, in a manifest `links` array, or typed interactively. A single playlist URL is enough; it no longer has to be mixed with other links. Digital Reaper reports the playlist, then downloads it in one pass:
 
-- Files are numbered in playlist order (`01 - Title [id].mp4`), inside a folder named after the playlist plus its ID, so two playlists with the same title never share a folder.
+- Files are numbered in playlist order (`01 - Title [id].mp4`, or `.mp3` in audio mode), inside a folder named after the playlist plus its ID, so two playlists with the same title never share a folder.
 - Re-running the same playlist only fills the gaps; finished items are skipped.
 - The summary reports what is on disk (`40/40`), so a resumed playlist is not reported as failed.
 - A partially failed playlist keeps its URL in `audioLinks.txt` / `videoLinks.txt`, so the next run retries only the missing items.
@@ -90,6 +94,18 @@ If no link files or manifest are provided:
 5. Use option `3` to start one silent background pass right away.
 
 The task is registered with PowerShell 7 when it is installed (full path, because a scheduled task does not inherit the PATH of the window that created it) and with Windows PowerShell otherwise. Re-run option `1` after installing or removing `pwsh` so the task picks up the current engine.
+
+Registration writes the exact command `"<engine>" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "...\digitalReaper.ps1" -Silent` with run level `Highest available`.
+
+### Scheduled mode (Linux)
+
+`scheduler.bat` is Windows-only; use `cron` instead. This runs one silent pass every four hours and appends anything unexpected to `engine/cron.log`:
+
+```bash
+0 */4 * * * cd /path/to/Digital-Reaper && pwsh -NoProfile -File digitalReaper.ps1 -Silent >> engine/cron.log 2>&1
+```
+
+A silent pass exits non-zero only when it fails outright, and each run leaves a `run:` / `batch run:` summary in `engine/reaper.log`, so `tail engine/reaper.log` answers whether the last pass did anything.
 
 ## Configuration
 
@@ -142,6 +158,7 @@ Digital-Reaper/
 ├── setup.sh
 ├── setup.ps1
 ├── digitalReaper.bat
+├── digitalReaper.sh
 ├── digitalReaper.ps1
 ├── settings.json
 ├── settings.example.json
@@ -167,6 +184,12 @@ Run the built-in self-check:
 
 ```bat
 digitalReaper.bat /doctor
+```
+
+On Linux:
+
+```bash
+./digitalReaper.sh /doctor
 ```
 
 It checks the engine binaries, `yt-dlp` version and freshness, the JavaScript runtime, cookie configuration, output folder writability, the session lock and a live metadata extraction. The live extraction uses the same cookies, player client and JavaScript runtime as a real download, so a pass here reflects what downloads will actually do. It exits with code 1 when a hard check fails, and every `[FAIL]` line says what to fix.
@@ -202,6 +225,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 - Run `scheduler.bat` as Administrator if task registration fails.
 - Confirm URLs exist in `audioLinks.txt` or `videoLinks.txt`.
 - Check Task Scheduler for `DigitalReaper`.
+- Task Scheduler's defaults still apply: a task does not start on battery power, and it stops if the machine switches to battery. Plug the machine in, or flip those two options in the task's Conditions tab.
 
 ## Contributing
 

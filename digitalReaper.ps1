@@ -44,7 +44,20 @@ else {
         ($PSVersionTable.PSEdition -eq "Desktop") -or ($env:OS -eq "Windows_NT")
     }
 }
-$script:YtDlpAssetName = if ($script:IsWindowsPlatform) { "yt-dlp.exe" } else { "yt-dlp_linux" }
+$script:YtDlpAssetName = if ($script:IsWindowsPlatform) {
+    "yt-dlp.exe"
+}
+else {
+    # The Linux releases are per-architecture and the plain name is x86_64 only,
+    # so an ARM box would download a binary it cannot execute.
+    $architecture = $null
+    try { $architecture = [string][System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture } catch { }
+    switch ($architecture) {
+        "Arm64" { "yt-dlp_linux_aarch64" }
+        "Arm"   { "yt-dlp_linux_armv7l" }
+        default { "yt-dlp_linux" }
+    }
+}
 $script:YtDlpBinaryName = if ($script:IsWindowsPlatform) { "yt-dlp.exe" } else { "yt-dlp" }
 $script:FfmpegBinaryName = if ($script:IsWindowsPlatform) { "ffmpeg.exe" } else { "ffmpeg" }
 $script:FfprobeBinaryName = if ($script:IsWindowsPlatform) { "ffprobe.exe" } else { "ffprobe" }
@@ -52,6 +65,21 @@ $script:YtDlpPath = Join-Path $script:EngineDir $script:YtDlpBinaryName
 $script:FfmpegPath = Join-Path $script:EngineDir $script:FfmpegBinaryName
 $script:FfprobePath = Join-Path $script:EngineDir $script:FfprobeBinaryName
 $script:FfmpegLocation = $script:EngineDir
+
+# Shown in messages, so each platform reads its own path separator and setup script.
+$script:SetupHint = if ($script:IsWindowsPlatform) { "setup.bat" } else { "setup.sh" }
+$script:LogDisplayPath = if ($script:IsWindowsPlatform) { "engine\reaper.log" } else { "engine/reaper.log" }
+$script:LockDisplayPath = if ($script:IsWindowsPlatform) { "engine\reaper.lock" } else { "engine/reaper.lock" }
+
+# ffmpeg comes from the distro on Linux, so take it from PATH when engine/ has
+# none. Resolved here rather than in Install-Ffmpeg because -Doctor runs before
+# initialization and would otherwise report a missing engine on a healthy box.
+if (-not $script:IsWindowsPlatform -and -not (Test-Path $script:FfmpegPath)) {
+    $systemFfmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+    $systemFfprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
+    if ($systemFfmpeg) { $script:FfmpegPath = $systemFfmpeg.Source }
+    if ($systemFfprobe) { $script:FfprobePath = $systemFfprobe.Source }
+}
 
 $script:DownloadsDir = Join-Path $script:ScriptDir "downloads"
 $script:DefaultConfigFile = Join-Path $script:ScriptDir "settings.json"
@@ -217,7 +245,7 @@ function Show-ItemResult {
         Write-Line -Text $Detail -Color $(if ($ok) { "DarkGray" } else { "Yellow" })
     }
     elseif ($Warnings -gt 0) {
-        Write-Line -Text ("$Warnings warning(s) - logged to engine\reaper.log") -Color "DarkGray"
+        Write-Line -Text ("$Warnings warning(s) - logged to $script:LogDisplayPath") -Color "DarkGray"
     }
     else {
         Write-Host ""
@@ -501,7 +529,6 @@ function Load-Settings {
     elseif (Test-Path $script:DefaultConfigFile) {
         try {
             Merge-SettingsFromFile -Settings $settings -FilePath $script:DefaultConfigFile
-            Show-ProgressUpdate "Settings loaded from: settings.json" -Type "Success"
         }
         catch {
             $backupPath = "$($script:DefaultConfigFile).broken"
@@ -708,7 +735,7 @@ function Install-YtDlp {
     catch {
         if (Test-Path $incomingPath) { Remove-Item $incomingPath -Force -ErrorAction SilentlyContinue }
         Show-ProgressUpdate "[!] Failed to install yt-dlp: $($_.Exception.Message)" -Type "Error"
-        Show-ProgressUpdate "    Check the internet connection, then run setup.bat again." -Type "Warning"
+        Show-ProgressUpdate "    Check the internet connection, then run $script:SetupHint again." -Type "Warning"
         return $false
     }
 }
@@ -890,8 +917,7 @@ function Initialize-DigitalReaper {
     Set-HiddenAttribute -Path $script:FfmpegPath
     Set-HiddenAttribute -Path $script:FfprobePath
     Set-HiddenAttribute -Path $script:EngineDir
-    
-    Show-ProgressUpdate "[+] All DIGITAL REAPER components ready" -Type "Success"
+
     return $true
 }
 
@@ -951,7 +977,11 @@ function Update-YtDlpSilent {
                 if (Test-Path $incomingPath) { Remove-Item $incomingPath -Force -ErrorAction SilentlyContinue }
 
                 if (Test-Path $YtDlpPath) {
-                    (Get-Item $YtDlpPath -Force).Attributes = [System.IO.FileAttributes]::Normal
+                    # Only Windows refuses to overwrite a hidden file. On Linux the
+                    # attribute means nothing and .NET will not set it.
+                    if ($IsWindowsPlatform) {
+                        (Get-Item $YtDlpPath -Force).Attributes = [System.IO.FileAttributes]::Normal
+                    }
                     Copy-Item $YtDlpPath $backupPath -Force
                 }
 
@@ -973,8 +1003,7 @@ function Update-YtDlpSilent {
 
                     Remove-Item -Path $YtDlpPath -Force -ErrorAction SilentlyContinue
                     Move-Item -Path $incomingPath -Destination $YtDlpPath -Force -ErrorAction Stop
-                    $installed = Get-Item $YtDlpPath -Force
-                    $installed.Attributes = $installed.Attributes -bor [System.IO.FileAttributes]::Hidden
+                    Set-HiddenAttribute -Path $YtDlpPath
                     Set-Content -Path $VersionFilePath -Value $latestVersion
                     if (Test-Path $backupPath) { Remove-Item $backupPath -Force -ErrorAction SilentlyContinue }
 
@@ -984,8 +1013,7 @@ function Update-YtDlpSilent {
                     if (Test-Path $incomingPath) { Remove-Item $incomingPath -Force -ErrorAction SilentlyContinue }
                     if ((Test-Path $backupPath) -and -not (Test-Path $YtDlpPath)) {
                         Copy-Item $backupPath $YtDlpPath -Force
-                        $restored = Get-Item $YtDlpPath -Force
-                        $restored.Attributes = $restored.Attributes -bor [System.IO.FileAttributes]::Hidden
+                        Set-HiddenAttribute -Path $YtDlpPath
                     }
                     # Report it: a stale yt-dlp is the main cause of sudden bot checks,
                     # and silence here costs the user months of failed extractions.
@@ -1766,6 +1794,25 @@ function ConvertTo-CommandLineArgument {
     return $builder.ToString()
 }
 
+# ArgumentList hands every argument to the OS verbatim, which is the only way a
+# path containing spaces or quotes survives on Linux (background quotes are not
+# re-parsed there the way Windows' command-line rules allow). Windows PowerShell
+# 5.1 has no ArgumentList, so it keeps the quoted single-string form.
+function Set-ProcessArguments {
+    param(
+        [System.Diagnostics.ProcessStartInfo]$StartInfo,
+        [string[]]$Arguments
+    )
+
+    $listProperty = $StartInfo.PSObject.Properties['ArgumentList']
+    if ($listProperty) {
+        foreach ($argument in @($Arguments)) { [void]$listProperty.Value.Add([string]$argument) }
+        return
+    }
+
+    $StartInfo.Arguments = (@($Arguments | ForEach-Object { ConvertTo-CommandLineArgument -Value ([string]$_) }) -join ' ')
+}
+
 # stdout stays attached to the console so yt-dlp's live progress, speed and ETA
 # keep working, while stderr is captured. That capture is what makes failure
 # classification possible at all - the previous version never saw an error text.
@@ -1778,7 +1825,7 @@ function Invoke-YtDlpAndCapture {
     if (-not (Test-Path $script:YtDlpPath)) {
         return [pscustomobject]@{
             Success   = $false
-            ErrorText = "ERROR: yt-dlp is missing. Run setup.bat to install the engine."
+            ErrorText = "ERROR: yt-dlp is missing. Run $script:SetupHint to install the engine."
         }
     }
 
@@ -1790,7 +1837,7 @@ function Invoke-YtDlpAndCapture {
     $startInfo.RedirectStandardOutput = $true
     $startInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
     $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
-    $startInfo.Arguments = (@($YtDlpArgs | ForEach-Object { ConvertTo-CommandLineArgument -Value ([string]$_) }) -join ' ')
+    Set-ProcessArguments -StartInfo $startInfo -Arguments $YtDlpArgs
 
     $process = $null
     try {
@@ -1892,7 +1939,7 @@ function Invoke-YtDlpCaptureOutput {
     $startInfo.RedirectStandardError = $true
     $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $startInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-    $startInfo.Arguments = (@($YtDlpArgs | ForEach-Object { ConvertTo-CommandLineArgument -Value ([string]$_) }) -join ' ')
+    Set-ProcessArguments -StartInfo $startInfo -Arguments $YtDlpArgs
 
     $process = $null
     try {
@@ -2210,7 +2257,7 @@ function Show-MissionSummary {
             Write-Host ("   ! " + $entry) -ForegroundColor Yellow
         }
         if ($Failures.Count -gt 5) {
-            Write-Host ("   ! ...and " + ($Failures.Count - 5) + " more in engine\reaper.log") -ForegroundColor DarkGray
+            Write-Host ("   ! ...and " + ($Failures.Count - 5) + " more in $script:LogDisplayPath") -ForegroundColor DarkGray
         }
     }
 
@@ -2531,6 +2578,18 @@ function Write-DoctorLine {
     if ($Detail) { Write-Host $Detail -ForegroundColor DarkGray } else { Write-Host "" }
 }
 
+# Clear-Host throws "The handle is invalid" when stdout is a pipe or a file (cron,
+# CI, a scheduled task, or simply piping the output), which killed the whole run
+# before it started. Clearing the screen is cosmetic, so it must never be fatal.
+function Clear-Console {
+    try {
+        if (-not [Console]::IsOutputRedirected) { Clear-Host }
+    }
+    catch {
+        # No console to clear - keep going.
+    }
+}
+
 # Diagnostic pass: never installs, never downloads media, never takes the lock.
 # Returns 0 when nothing is broken, 1 when at least one hard check failed.
 function Invoke-Doctor {
@@ -2552,14 +2611,14 @@ function Invoke-Doctor {
     $engineReady = $true
     foreach ($binary in $binaries) {
         if (-not (Test-Path $binary.Path)) {
-            Write-DoctorLine "FAIL" $binary.Name "missing - run setup.bat"
+            Write-DoctorLine "FAIL" $binary.Name "missing - run $script:SetupHint"
             $failures++
             $engineReady = $false
             continue
         }
         $item = Get-Item $binary.Path -Force -ErrorAction SilentlyContinue
         if (-not $item -or $item.Length -eq 0) {
-            Write-DoctorLine "FAIL" $binary.Name "file is empty - re-run setup.bat"
+            Write-DoctorLine "FAIL" $binary.Name "file is empty - re-run $script:SetupHint"
             $failures++
             $engineReady = $false
             continue
@@ -2570,7 +2629,7 @@ function Invoke-Doctor {
     if (-not $engineReady) {
         Write-Host ""
         Write-Host "  Engine is incomplete - skipping the checks that need it." -ForegroundColor Yellow
-        Write-Host "  Run setup.bat (or setup.sh), then try again." -ForegroundColor Yellow
+        Write-Host "  Run $script:SetupHint, then try again." -ForegroundColor Yellow
         Write-Host ""
         return 1
     }
@@ -2722,7 +2781,7 @@ function Invoke-Doctor {
 # ===================================================================
 
 try {
-    Clear-Host
+    Clear-Console
 
     # /doctor is a diagnostic pass, not a run: no install, no lock, no download.
     if ($Doctor) {
@@ -2753,7 +2812,7 @@ try {
         $holder = ""
         try { $holder = ([string](Get-Content $script:LockFilePath -Raw -ErrorAction SilentlyContinue)).Trim() } catch { }
         Show-ProgressUpdate "[!] Another instance is already running (pid $holder). Exiting." -Type "Warning"
-        Show-ProgressUpdate "    If no other window is open, delete engine\reaper.lock and start again." -Type "Warning"
+        Show-ProgressUpdate "    If no other window is open, delete $script:LockDisplayPath and start again." -Type "Warning"
         if (-not $Silent) { Read-Host "Press Enter to exit..." }
         exit 1
     }
@@ -2790,6 +2849,9 @@ catch {
     Write-Host "`n[!] CRITICAL ERROR: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "Stack trace:" -ForegroundColor DarkRed
     Write-Host $_.ScriptStackTrace -ForegroundColor DarkRed
+    # A scheduled or cron run has nobody reading the window, so the failure has to
+    # reach the caller as an exit code.
+    exit 1
 }
 finally {
     Exit-ReaperLock
