@@ -369,9 +369,8 @@ function Get-UrlsFromFile {
     if (Test-Path $FilePath) {
         $content = Get-Content $FilePath
         foreach ($line in $content) {
-            if (Test-ValidUrl -Line $line) {
-                $urls += Remove-InvisibleCharacters -Text $line
-            }
+            $downloadUrl = ConvertTo-DownloadUrl -Text $line
+            if ($downloadUrl) { $urls += $downloadUrl }
         }
         if ($urls.Count -gt 0) {
             Show-ProgressUpdate "[+] $($urls.Count) target(s) loaded from file" -Type "Target"
@@ -425,10 +424,46 @@ function Remove-InvisibleCharacters {
     return $Text.Trim().TrimStart([char]0xFEFF, [char]0x200B, [char]0x200C, [char]0x200D, [char]0xFFFE)
 }
 
+# Turns whatever a paste produced into a URL yt-dlp can use, or $null when the
+# text is not a link. Share links arrive as "youtu.be/xyz", as "HTTPS://youtu.be/xyz"
+# and as "www.youtube.com/watch?v=..." just as often as with a lowercase scheme;
+# every one of those used to be ignored, so batch mode never saw them and their
+# link-file lines could never be cleaned up.
+function ConvertTo-DownloadUrl {
+    param([string]$Text)
+    if ($null -eq $Text) { return $null }
+    $value = Remove-InvisibleCharacters -Text $Text
+    if ([string]::IsNullOrWhiteSpace($value)) { return $null }
+    if ($value.StartsWith("#")) { return $null }
+
+    if ($value -match '^(?i)https?://') { return $value }
+    # Protocol-relative paste: "//www.youtube.com/watch?v=..."
+    if ($value -match '^//[^\s/]+\.[^\s/]+') { return "https:$value" }
+    if ($value -match '^www\.[^\s/]+\.[^\s/]+') { return "https://$value" }
+    # Scheme-less share link: "youtu.be/abc123", "m.youtube.com/watch?v=...".
+    # The slash is required so a stray "notes.txt" is not read as a link.
+    if ($value -match '^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}/\S*$') { return "https://$value" }
+
+    return $null
+}
+
 function Test-ValidUrl {
     param([string]$Line)
-    $trimmed = Remove-InvisibleCharacters -Text $Line
-    return $trimmed -and -not $trimmed.StartsWith("#") -and ($trimmed.StartsWith("http") -or $trimmed.StartsWith("www"))
+    return [bool](ConvertTo-DownloadUrl -Text $Line)
+}
+
+# Link files keep the line the user wrote while the download uses the normalised
+# URL, so removal has to accept either spelling of the same link.
+function Test-UrlMatchesLine {
+    param(
+        [string]$Line,
+        [string[]]$Urls
+    )
+    if (-not $Urls -or $Urls.Count -eq 0) { return $false }
+    $cleanLine = Remove-InvisibleCharacters -Text $Line
+    if ($Urls -contains $cleanLine) { return $true }
+    $normalized = ConvertTo-DownloadUrl -Text $cleanLine
+    return [bool]($normalized -and ($Urls -contains $normalized))
 }
 
 # ===================================================================
@@ -1921,6 +1956,32 @@ function Exit-ReaperLock {
     Remove-Item -Path $script:LockFilePath -Force -ErrorAction SilentlyContinue
 }
 
+# Closing the window or killing a run leaves the engine's yt-dlp behind. The next
+# run then downloads the same video through a second yt-dlp into the same .part
+# file, which doubles the traffic and can corrupt the merge. This runs while the
+# session lock is held, so an engine process from this install whose parent is
+# gone is a leftover and safe to stop.
+function Stop-OrphanedEngineProcesses {
+    if (-not $script:IsWindowsPlatform) { return }
+    try {
+        $engineName = [System.IO.Path]::GetFileName($script:YtDlpPath)
+        $candidates = @(Get-CimInstance Win32_Process -Filter "Name='$engineName'" -ErrorAction Stop)
+    }
+    catch {
+        # WMI unavailable: never block a download over diagnostics.
+        return
+    }
+
+    foreach ($candidate in $candidates) {
+        if ($candidate.ProcessId -eq $PID) { continue }
+        # Another install, or a download whose run is still alive, is not ours to touch.
+        if (-not $candidate.ExecutablePath -or $candidate.ExecutablePath -ne $script:YtDlpPath) { continue }
+        if (Get-Process -Id $candidate.ParentProcessId -ErrorAction SilentlyContinue) { continue }
+        Stop-Process -Id $candidate.ProcessId -Force -ErrorAction SilentlyContinue
+        Show-ProgressUpdate "[~] Stopped a leftover yt-dlp (pid $($candidate.ProcessId)) from an earlier run." -Type "Warning"
+    }
+}
+
 # Metadata probes need stdout, which Invoke-YtDlpAndCapture deliberately leaves
 # on the console. Merging the two streams with 2>&1 used to feed a lone warning
 # straight into ConvertFrom-Json and fail the whole probe.
@@ -2076,7 +2137,11 @@ function Get-UrlsSmartMode {
         $url = ""
         while ([string]::IsNullOrWhiteSpace($url)) {
             Write-Host ">> Enter Target URL (Video or Playlist): " -ForegroundColor "Yellow"
-            $url = Read-Host
+            $url = [string](Read-Host)
+            # Upgrade a scheme-less paste, but keep anything else as typed so
+            # yt-dlp's own pseudo-URLs (ytsearch:) still work.
+            $normalizedUrl = ConvertTo-DownloadUrl -Text $url
+            if ($normalizedUrl) { $url = $normalizedUrl } else { $url = $url.Trim() }
             if ([string]::IsNullOrWhiteSpace($url)) { 
                 Write-Host ""
                 Show-ProgressUpdate "[!] Target URL cannot be empty." -Type "Warning"
@@ -2126,14 +2191,14 @@ function Process-LinkFile {
     $linkEntries = @()
 
     foreach ($line in $allLines) {
-        if (Test-ValidUrl -Line $line) {
-            $originalUrl = Remove-InvisibleCharacters -Text $line
-
-            $entry = [pscustomobject]@{
-                OriginalUrl = $originalUrl
-                WasSuccess  = $false
+        # The line stays exactly as written for the removal step; only the
+        # download gets the normalised URL.
+        $downloadUrl = ConvertTo-DownloadUrl -Text $line
+        if ($downloadUrl) {
+            $linkEntries += [pscustomobject]@{
+                OriginalUrl = Remove-InvisibleCharacters -Text $line
+                DownloadUrl = $downloadUrl
             }
-            $linkEntries += $entry
         }
     }
 
@@ -2157,7 +2222,7 @@ function Process-LinkFile {
     $startedAt = Get-Date
 
     foreach ($entry in $linkEntries) {
-        $urlToUse = $entry.OriginalUrl
+        $urlToUse = $entry.DownloadUrl
         $targetNum++
         try {
             Show-ItemStart -Index $targetNum -Total $linkEntries.Count -Label $urlToUse
@@ -2167,8 +2232,11 @@ function Process-LinkFile {
             $itemElapsed = Format-Elapsed -Span ((Get-Date) - $itemStart)
             if ($downloadResult.Success) {
                 $successCount++
-                $entry.WasSuccess = $true
                 Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Warnings $downloadResult.Warnings
+                # Unhook the link the moment it lands. Waiting for the end of the
+                # file meant an interrupted, or a multi-hour, run left finished
+                # links queued in audioLinks.txt / videoLinks.txt.
+                Remove-SuccessfulLinks -FilePath $FilePath -SuccessUrls @($entry.OriginalUrl)
             }
             else {
                 $friendly = Get-FriendlyErrorHint -ErrorText $downloadResult.ErrorText -Kind $downloadResult.Kind
@@ -2185,9 +2253,6 @@ function Process-LinkFile {
         }
         Write-Host ""
     }
-
-    $successUrls = @($linkEntries | Where-Object { $_.WasSuccess } | ForEach-Object { $_.OriginalUrl })
-    Remove-SuccessfulLinks -FilePath $FilePath -SuccessUrls $successUrls
 
     return [pscustomobject]@{
         Success  = $successCount
@@ -2214,8 +2279,7 @@ function Remove-SuccessfulLinks {
     $linesOut = New-Object System.Collections.Generic.List[string]
     foreach ($line in $allLines) {
         if (Test-ValidUrl -Line $line) {
-            $cleanLine = Remove-InvisibleCharacters -Text $line
-            if ($SuccessUrls -notcontains $cleanLine) {
+            if (-not (Test-UrlMatchesLine -Line $line -Urls $SuccessUrls)) {
                 $linesOut.Add($line)
             }
         }
@@ -2223,7 +2287,14 @@ function Remove-SuccessfulLinks {
             $linesOut.Add($line)
         }
     }
-    Set-Content -LiteralPath $FilePath -Value $linesOut.ToArray() -Encoding UTF8
+    try {
+        Set-Content -LiteralPath $FilePath -Value $linesOut.ToArray() -Encoding UTF8 -ErrorAction Stop
+    }
+    catch {
+        # A link file held open by an editor used to abort the run here, after the
+        # downloads had already happened. Warn instead of dying.
+        Show-ProgressUpdate "[!] Could not remove finished link(s) from $FilePath - $($_.Exception.Message)" -Type "Warning"
+    }
 }
 
 function Show-MissionSummary {
@@ -2401,6 +2472,16 @@ function Run-InteractiveMode {
     else {
         $urls = @(Get-UrlsSmartMode | Where-Object { $_ })
     }
+
+    # One normalisation point for every input path, so the playlist check, the
+    # download and the post-run cleanup all agree on the same URL. Anything that
+    # is not link-shaped is passed through untouched (ytsearch:/similar input).
+    $urls = @(foreach ($candidate in $urls) {
+        $candidateText = [string]$candidate
+        if ([string]::IsNullOrWhiteSpace($candidateText)) { continue }
+        $normalizedCandidate = ConvertTo-DownloadUrl -Text $candidateText
+        if ($normalizedCandidate) { $normalizedCandidate } else { $candidateText.Trim() }
+    })
     
     if ($urls.Count -eq 0) {
         Show-ProgressUpdate "[!] No valid URLs found." -Type "Error"
@@ -2474,7 +2555,6 @@ function Run-InteractiveMode {
 
     $successCount = 0
     $failureCount = 0
-    $successUrls = @()
     $failures = @()
     $targetNum = 0
     $startedAt = Get-Date
@@ -2499,7 +2579,9 @@ function Run-InteractiveMode {
                 if ($plResult) {
                     $successCount += $plResult.Success
                     $failureCount += $plResult.Failure
-                    if ($plResult.Failure -eq 0 -and $plResult.Success -gt 0) { $successUrls += $url }
+                    if ($plResult.Failure -eq 0 -and $plResult.Success -gt 0) {
+                        Remove-SuccessfulLinks -FilePath $script:SourceFile -SuccessUrls @($url)
+                    }
                     continue
                 }
             }
@@ -2518,8 +2600,10 @@ function Run-InteractiveMode {
             $itemElapsed = Format-Elapsed -Span ((Get-Date) - $itemStart)
             if ($downloadResult.Success) {
                 $successCount++
-                $successUrls += $url
                 Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Warnings $downloadResult.Warnings
+                # Retire the link as soon as it finishes, not at the end of the run:
+                # a stopped run should never keep links that already downloaded.
+                Remove-SuccessfulLinks -FilePath $script:SourceFile -SuccessUrls @($url)
             }
             else {
                 $friendly = Get-FriendlyErrorHint -ErrorText $downloadResult.ErrorText -Kind $downloadResult.Kind
@@ -2536,9 +2620,6 @@ function Run-InteractiveMode {
         }
         Write-Host ""
     }
-
-    # Remove successfully downloaded links from the source file
-    Remove-SuccessfulLinks -FilePath $script:SourceFile -SuccessUrls $successUrls
 
     Show-MissionSummary -SuccessCount $successCount -FailureCount $failureCount -OutputDir $outputDir `
         -Failures $failures -TotalBytes (Get-RecentFileBytes -Path $outputDir -Since $startedAt) -Elapsed ((Get-Date) - $startedAt)
@@ -2817,6 +2898,10 @@ try {
         exit 1
     }
     
+    # Clear leftovers before anything spawns, so two yt-dlp processes never fight
+    # over the same output file.
+    Stop-OrphanedEngineProcesses
+
     if ($settings.autoUpdate) {
         Update-YtDlpSilent
     }
