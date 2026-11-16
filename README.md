@@ -200,6 +200,14 @@ Digital Reaper writes `engine/reaper.lock` while it runs, so a scheduled task ca
 
 If it still blocks and no other window is open, delete `engine/reaper.lock` and start again.
 
+### A window was closed in the middle of a download
+
+Digital Reaper records the `yt-dlp` process it starts in `engine/yt-dlp.pid` and clears the record when that process exits. If a run dies while a download is in flight - the window is closed, the process is killed, the machine loses power - the next launch finds the still-running process through that record and stops it, together with any children it spawned, before starting anything. Two downloads therefore never write into the same `.part` file.
+
+This works the same on Linux through `digitalReaper.sh`, and it has to: a killed run leaves `yt-dlp` reparented to `init` there, so a "is the parent process still alive" check would never find it. On Windows the launch also sweeps any `engine\yt-dlp.exe` whose parent is gone, which catches leftovers the record never saw.
+
+The one case neither check can see is a leftover whose record was deleted along with `engine\` (for example by `cleanup.bat`). If a stray `yt-dlp` is still downloading, stop it by hand before starting the next run.
+
 ### PowerShell execution policy error
 
 Run in PowerShell:

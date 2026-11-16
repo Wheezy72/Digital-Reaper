@@ -96,6 +96,12 @@ $script:SourceFile = ""
 # Lock file — prevents concurrent scheduled runs
 $script:LockFilePath = Join-Path $script:EngineDir "reaper.lock"
 
+# Records the engine process this run spawned, so a run that dies mid-download can
+# be cleaned up on the next launch. This is the only leftover detector that works
+# off Windows: Linux reparents an orphan to init, so "is the parent alive" never
+# sees it.
+$script:EnginePidRecordFile = Join-Path $script:EngineDir "yt-dlp.pid"
+
 # Version file — persists the installed yt-dlp version across runs
 $script:VersionFilePath = Join-Path $script:EngineDir "version.txt"
 $script:DefaultOuterRetryCount = 3
@@ -1877,6 +1883,7 @@ function Invoke-YtDlpAndCapture {
     $process = $null
     try {
         $process = [System.Diagnostics.Process]::Start($startInfo)
+        Register-EngineProcess -Process $process
 
         # Both pipes must be drained. Leaving stdout inherited looked simpler, but
         # nothing reads it, so a verbose run fills the pipe buffer and deadlocks as
@@ -1907,7 +1914,12 @@ function Invoke-YtDlpAndCapture {
         }
     }
     finally {
-        if ($process) { $process.Dispose() }
+        if ($process) {
+            # Only forget the PID once the process really ended. If it is still
+            # running, the next launch needs the record to clean it up.
+            if ($process.HasExited) { Unregister-EngineProcess -Process $process }
+            $process.Dispose()
+        }
     }
 }
 
@@ -1956,12 +1968,127 @@ function Exit-ReaperLock {
     Remove-Item -Path $script:LockFilePath -Force -ErrorAction SilentlyContinue
 }
 
+function Get-ComparableProcessPath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return "" }
+    try {
+        $target = [System.IO.File]::ResolveLinkTarget($Path, $true)
+        if ($target) { return $target.FullName }
+    }
+    catch { }
+    try { return [System.IO.Path]::GetFullPath($Path) }
+    catch { return $Path }
+}
+
+# yt-dlp re-executes itself for some extractors, so a leftover is a process tree,
+# not one process. Kill(entireProcessTree) takes the children with it where the
+# runtime has that overload; Windows PowerShell 5.1 falls back to a single kill.
+function Stop-EngineProcessTree {
+    param([int]$ProcessId)
+    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if (-not $process) { return }
+    try {
+        # .NET 5+ (PowerShell 7, so both launchers) kills the whole tree.
+        $process.Kill($true)
+        return
+    }
+    catch { }
+
+    # Windows PowerShell 5.1 has no tree overload: kill the process, then the
+    # children it left behind (Windows keeps the dead parent id on the child).
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    if (-not $script:IsWindowsPlatform) { return }
+    try {
+        foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction Stop)) {
+            Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch { }
+}
+
+# Records the engine process this run started. Bookkeeping must never break a
+# download, so every failure here is swallowed.
+function Register-EngineProcess {
+    param([System.Diagnostics.Process]$Process)
+    if (-not $Process) { return }
+    try {
+        $startedAt = $Process.StartTime.ToUniversalTime().Ticks
+        Set-Content -LiteralPath $script:EnginePidRecordFile -Value ("{0} {1}" -f $Process.Id, $startedAt) -Encoding ASCII -ErrorAction Stop
+    }
+    catch { }
+}
+
+function Unregister-EngineProcess {
+    param([System.Diagnostics.Process]$Process)
+    if (-not $Process -or -not (Test-Path -LiteralPath $script:EnginePidRecordFile)) { return }
+    try {
+        $fields = ([string](Get-Content -LiteralPath $script:EnginePidRecordFile -Raw -ErrorAction Stop)).Trim() -split '\s+'
+        $recordedId = 0
+        if ($fields.Count -ge 1 -and [int]::TryParse($fields[0], [ref]$recordedId) -and $recordedId -eq $Process.Id) {
+            Remove-Item -LiteralPath $script:EnginePidRecordFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch { }
+}
+
+# The record names the exact process this tool started, and its start time makes a
+# recycled PID safe to ignore. Works the same on Windows and Linux.
+function Stop-RecordedEngineProcess {
+    param([string]$RecordFile = $script:EnginePidRecordFile)
+    if (-not $RecordFile -or -not (Test-Path -LiteralPath $RecordFile)) { return }
+
+    $record = ""
+    try { $record = [string](Get-Content -LiteralPath $RecordFile -Raw -ErrorAction Stop) }
+    catch { return }
+
+    $fields = $record.Trim() -split '\s+'
+    $recordedId = 0
+    $recordedStart = [long]0
+    $validRecord = ($fields.Count -ge 1) -and [int]::TryParse($fields[0], [ref]$recordedId) -and $recordedId -gt 0
+    if ($validRecord -and $fields.Count -ge 2) { [void][long]::TryParse($fields[1], [ref]$recordedStart) }
+
+    $leftover = $null
+    if ($validRecord) {
+        $candidate = Get-Process -Id $recordedId -ErrorAction SilentlyContinue
+        if ($candidate) {
+            $sameProcess = $true
+            if ($recordedStart -gt 0) {
+                try {
+                    $drift = [Math]::Abs($candidate.StartTime.ToUniversalTime().Ticks - $recordedStart)
+                    $sameProcess = $drift -lt [TimeSpan]::FromSeconds(2).Ticks
+                }
+                catch { $sameProcess = $false }
+            }
+            if ($sameProcess) { $leftover = $candidate }
+        }
+    }
+
+    if ($leftover) {
+        # A recycled PID that somehow kept the start time is still not ours to
+        # kill unless it is this install's engine binary.
+        $candidatePath = ""
+        try { $candidatePath = [string]$leftover.Path } catch { }
+        $enginePath = Get-ComparableProcessPath -Path $script:YtDlpPath
+        if (-not $candidatePath -or (Get-ComparableProcessPath -Path $candidatePath) -eq $enginePath) {
+            Stop-EngineProcessTree -ProcessId $leftover.Id
+            Show-ProgressUpdate "[~] Stopped a leftover yt-dlp (pid $($leftover.Id)) from an earlier run." -Type "Warning"
+        }
+    }
+
+    Remove-Item -LiteralPath $RecordFile -Force -ErrorAction SilentlyContinue
+}
+
 # Closing the window or killing a run leaves the engine's yt-dlp behind. The next
 # run then downloads the same video through a second yt-dlp into the same .part
-# file, which doubles the traffic and can corrupt the merge. This runs while the
-# session lock is held, so an engine process from this install whose parent is
-# gone is a leftover and safe to stop.
+# file, which doubles the traffic and can corrupt the merge.
+#
+# Two detectors: the PID record above (every platform, including the Linux
+# launcher where an orphan is reparented to init), and the Windows sweep below,
+# which also finds engine processes the record never saw. Both run while the
+# session lock is held, so anything they find is a leftover.
 function Stop-OrphanedEngineProcesses {
+    Stop-RecordedEngineProcess
+
     if (-not $script:IsWindowsPlatform) { return }
     try {
         $engineName = [System.IO.Path]::GetFileName($script:YtDlpPath)
@@ -2005,6 +2132,7 @@ function Invoke-YtDlpCaptureOutput {
     $process = $null
     try {
         $process = [System.Diagnostics.Process]::Start($startInfo)
+        Register-EngineProcess -Process $process
         # One stream is read asynchronously so a full pipe cannot deadlock the child.
         $errorTask = $process.StandardError.ReadToEndAsync()
         $stdOut = $process.StandardOutput.ReadToEnd()
@@ -2021,7 +2149,10 @@ function Invoke-YtDlpCaptureOutput {
         return [pscustomobject]@{ Success = $false; StdOut = ""; StdErr = "ERROR: could not start yt-dlp: $($_.Exception.Message)" }
     }
     finally {
-        if ($process) { $process.Dispose() }
+        if ($process) {
+            if ($process.HasExited) { Unregister-EngineProcess -Process $process }
+            $process.Dispose()
+        }
     }
 }
 
