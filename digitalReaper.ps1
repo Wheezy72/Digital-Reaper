@@ -102,6 +102,10 @@ $script:LockFilePath = Join-Path $script:EngineDir "reaper.lock"
 # sees it.
 $script:EnginePidRecordFile = Join-Path $script:EngineDir "yt-dlp.pid"
 
+# One warning per run about the record: a spawn happens for every item, and a wall
+# of identical lines would bury the first one.
+$script:EnginePidRecordWarned = $false
+
 # Version file — persists the installed yt-dlp version across runs
 $script:VersionFilePath = Join-Path $script:EngineDir "version.txt"
 $script:DefaultOuterRetryCount = 3
@@ -2006,8 +2010,15 @@ function Stop-EngineProcessTree {
     catch { }
 }
 
-# Records the engine process this run started. Bookkeeping must never break a
-# download, so every failure here is swallowed.
+# Bookkeeping must never break a download, but it must not pretend to work either:
+# a record that cannot be written means a crash leaves a yt-dlp nobody can find.
+function Show-EngineRecordProblem {
+    param([string]$Message)
+    if ($script:EnginePidRecordWarned) { return }
+    $script:EnginePidRecordWarned = $true
+    Show-ProgressUpdate "[!] $Message" -Type "Warning"
+}
+
 function Register-EngineProcess {
     param([System.Diagnostics.Process]$Process)
     if (-not $Process) { return }
@@ -2015,7 +2026,9 @@ function Register-EngineProcess {
         $startedAt = $Process.StartTime.ToUniversalTime().Ticks
         Set-Content -LiteralPath $script:EnginePidRecordFile -Value ("{0} {1}" -f $Process.Id, $startedAt) -Encoding ASCII -ErrorAction Stop
     }
-    catch { }
+    catch {
+        Show-EngineRecordProblem "Could not write the engine PID record ($script:EnginePidRecordFile): $($_.Exception.Message). A leftover yt-dlp from this run will not be cleaned up."
+    }
 }
 
 function Unregister-EngineProcess {
@@ -2028,51 +2041,80 @@ function Unregister-EngineProcess {
             Remove-Item -LiteralPath $script:EnginePidRecordFile -Force -ErrorAction SilentlyContinue
         }
     }
-    catch { }
+    catch {
+        Show-EngineRecordProblem "Could not clear the engine PID record ($script:EnginePidRecordFile): $($_.Exception.Message). The next run may report a leftover that no longer exists."
+    }
 }
 
 # The record names the exact process this tool started, and its start time makes a
 # recycled PID safe to ignore. Works the same on Windows and Linux.
+# Every branch that cannot act says why: on Linux the process API is the runtime's,
+# so a silent failure here would be a silent failure of the whole sweep.
 function Stop-RecordedEngineProcess {
     param([string]$RecordFile = $script:EnginePidRecordFile)
     if (-not $RecordFile -or -not (Test-Path -LiteralPath $RecordFile)) { return }
 
     $record = ""
     try { $record = [string](Get-Content -LiteralPath $RecordFile -Raw -ErrorAction Stop) }
-    catch { return }
+    catch {
+        Show-EngineRecordProblem "Could not read the engine PID record ($RecordFile): $($_.Exception.Message). A leftover yt-dlp cannot be cleaned up."
+        return
+    }
 
     $fields = $record.Trim() -split '\s+'
     $recordedId = 0
     $recordedStart = [long]0
     $validRecord = ($fields.Count -ge 1) -and [int]::TryParse($fields[0], [ref]$recordedId) -and $recordedId -gt 0
-    if ($validRecord -and $fields.Count -ge 2) { [void][long]::TryParse($fields[1], [ref]$recordedStart) }
+    if (-not $validRecord) {
+        Show-EngineRecordProblem "Engine PID record ($RecordFile) is not a '<pid> <start>' pair, so a leftover yt-dlp cannot be identified. Deleting it."
+        Remove-Item -LiteralPath $RecordFile -Force -ErrorAction SilentlyContinue
+        return
+    }
+    if ($fields.Count -ge 2) { [void][long]::TryParse($fields[1], [ref]$recordedStart) }
 
-    $leftover = $null
-    if ($validRecord) {
-        $candidate = Get-Process -Id $recordedId -ErrorAction SilentlyContinue
-        if ($candidate) {
-            $sameProcess = $true
-            if ($recordedStart -gt 0) {
-                try {
-                    $drift = [Math]::Abs($candidate.StartTime.ToUniversalTime().Ticks - $recordedStart)
-                    $sameProcess = $drift -lt [TimeSpan]::FromSeconds(2).Ticks
-                }
-                catch { $sameProcess = $false }
-            }
-            if ($sameProcess) { $leftover = $candidate }
+    $candidate = Get-Process -Id $recordedId -ErrorAction SilentlyContinue
+    if (-not $candidate) {
+        # The record outlived a process that already finished: nothing to stop.
+        Remove-Item -LiteralPath $RecordFile -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    $sameProcess = $true
+    if ($recordedStart -gt 0) {
+        try {
+            $drift = [Math]::Abs($candidate.StartTime.ToUniversalTime().Ticks - $recordedStart)
+            $sameProcess = $drift -lt [TimeSpan]::FromSeconds(2).Ticks
+        }
+        catch {
+            Show-EngineRecordProblem "Cannot read the start time of pid $recordedId on this system, so a recycled PID cannot be ruled out and the recorded yt-dlp is left alone."
+            Remove-Item -LiteralPath $RecordFile -Force -ErrorAction SilentlyContinue
+            return
         }
     }
 
-    if ($leftover) {
-        # A recycled PID that somehow kept the start time is still not ours to
-        # kill unless it is this install's engine binary.
-        $candidatePath = ""
-        try { $candidatePath = [string]$leftover.Path } catch { }
-        $enginePath = Get-ComparableProcessPath -Path $script:YtDlpPath
-        if (-not $candidatePath -or (Get-ComparableProcessPath -Path $candidatePath) -eq $enginePath) {
-            Stop-EngineProcessTree -ProcessId $leftover.Id
-            Show-ProgressUpdate "[~] Stopped a leftover yt-dlp (pid $($leftover.Id)) from an earlier run." -Type "Warning"
-        }
+    if (-not $sameProcess) {
+        Show-ProgressUpdate "[~] Engine PID record names pid $recordedId, but that is a different process now (recycled PID) - ignoring." -Type "System"
+        Remove-Item -LiteralPath $RecordFile -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    # Even with a matching record, only this install's engine binary is fair game.
+    $candidatePath = ""
+    try { $candidatePath = [string]$candidate.Path } catch { }
+    $enginePath = Get-ComparableProcessPath -Path $script:YtDlpPath
+    if ($candidatePath -and (Get-ComparableProcessPath -Path $candidatePath) -ne $enginePath) {
+        Show-EngineRecordProblem "Recorded pid $recordedId is '$candidatePath', not this install's engine - leaving it alone."
+        Remove-Item -LiteralPath $RecordFile -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    Stop-EngineProcessTree -ProcessId $candidate.Id
+    Start-Sleep -Milliseconds 300
+    if (Get-Process -Id $candidate.Id -ErrorAction SilentlyContinue) {
+        Show-ProgressUpdate "[!] A leftover yt-dlp (pid $($candidate.Id)) refused to stop - stop it by hand before the next download." -Type "Warning"
+    }
+    else {
+        Show-ProgressUpdate "[~] Stopped a leftover yt-dlp (pid $($candidate.Id)) from an earlier run." -Type "Warning"
     }
 
     Remove-Item -LiteralPath $RecordFile -Force -ErrorAction SilentlyContinue
@@ -2959,6 +3001,42 @@ function Invoke-Doctor {
         Write-DoctorLine "FAIL" "live extraction" "$kind - $digest"
         Write-DoctorLine "INFO" "hint" (Get-FriendlyErrorHint -ErrorText $probe.StdErr -Kind $kind)
         $failures++
+    }
+
+    # --- leftover yt-dlp cleanup ---
+    # The sweep needs two things: a record it can write, and process start times it
+    # can read. Neither comes from WMI on Linux, so this check is how a Linux user
+    # confirms the sweep can do its job there instead of failing silently.
+    if (Test-Path -LiteralPath $script:EnginePidRecordFile) {
+        $pending = ([string](Get-Content -LiteralPath $script:EnginePidRecordFile -Raw -ErrorAction SilentlyContinue)).Trim()
+        Write-DoctorLine "WARN" "pid record" "a leftover may be pending ('$pending') - the next run stops it"
+        $warnings++
+    }
+
+    $recordProbeError = ""
+    try {
+        $selfStart = (Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks
+        Set-Content -LiteralPath $script:EnginePidRecordFile -Value ("{0} {1}" -f $PID, $selfStart) -Encoding ASCII -ErrorAction Stop
+        Remove-Item -LiteralPath $script:EnginePidRecordFile -Force -ErrorAction Stop
+    }
+    catch {
+        $recordProbeError = $_.Exception.Message
+    }
+
+    $startTimeError = ""
+    try { $null = (Get-Process -Id $PID).StartTime }
+    catch { $startTimeError = $_.Exception.Message }
+
+    if ($recordProbeError) {
+        Write-DoctorLine "FAIL" "leftover sweep" "cannot write $($script:EnginePidRecordFile) - $recordProbeError"
+        $failures++
+    }
+    elseif ($startTimeError) {
+        Write-DoctorLine "FAIL" "leftover sweep" "cannot read process start times - $startTimeError"
+        $failures++
+    }
+    else {
+        Write-DoctorLine "OK" "leftover sweep" "pid record and process start times available"
     }
 
     # --- last logged issue ---

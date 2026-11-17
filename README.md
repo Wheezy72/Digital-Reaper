@@ -208,6 +208,10 @@ This works the same on Linux through `digitalReaper.sh`, and it has to: a killed
 
 The one case neither check can see is a leftover whose record was deleted along with `engine\` (for example by `cleanup.bat`). If a stray `yt-dlp` is still downloading, stop it by hand before starting the next run.
 
+This mechanism never fails quietly. If the PID record cannot be written, if it holds something that is not a `<pid> <start>` pair, if process start times cannot be read on the platform, or if the recorded PID turns out not to be this install's engine, the run prints a `[!]` line saying which of those happened. A leftover that refuses to die is reported too, instead of being assumed stopped.
+
+To confirm the sweep can work on a given machine, run `/doctor`. Its `leftover sweep` line is `OK` when the PID record can be written and process start times can be read, `FAIL` with the reason otherwise, and a pending record from an earlier run is reported as a warning. That check is how the Linux path (`digitalReaper.sh`, where these primitives come from the runtime instead of WMI) is verified on the machine it actually runs on.
+
 ### PowerShell execution policy error
 
 Run in PowerShell:
