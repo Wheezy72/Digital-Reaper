@@ -11,7 +11,12 @@ param(
     [string]$ConfigFile = "",
     [switch]$Silent,
     [switch]$SetupOnly,
-    [switch]$Doctor
+    [switch]$Doctor,
+    [switch]$Status,
+    [switch]$DryRun,
+    [string]$VideoQuality = "",
+    [string]$AudioFormat = "",
+    [string]$OutputFolder = ""
 )
 
 # Windows PowerShell 5.1 can still negotiate TLS 1.0, which GitHub rejects. Without
@@ -110,6 +115,9 @@ $script:EnginePidRecordWarned = $false
 $script:VersionFilePath = Join-Path $script:EngineDir "version.txt"
 $script:DefaultOuterRetryCount = 3
 $script:LogFilePath = Join-Path $script:EngineDir "reaper.log"
+# Machine-readable outcome of the last completed run, so a silent or scheduled pass
+# can be asked what it did without digging through the log.
+$script:RunStateFile = Join-Path $script:EngineDir "last-run.json"
 
 # --- Bot-guard tuning -------------------------------------------------------
 # Ordered YouTube player clients, tried ONLY after a bot check is hit. yt-dlp's
@@ -151,6 +159,9 @@ $script:RetryPolicy = @{
     RateLimit         = @{ Retry = $true; BaseDelay = 15; MaxDelay = 300; Escalate = $false }
     Network           = @{ Retry = $true; BaseDelay = 3; MaxDelay = 30; Escalate = $false }
     Transient         = @{ Retry = $true; BaseDelay = 3; MaxDelay = 15; Escalate = $false }
+    # A file that "finished" but cannot be read back is resumed on the next
+    # attempt: --continue re-fetches only the part that is missing.
+    Incomplete        = @{ Retry = $true; BaseDelay = 2; MaxDelay = 5; Escalate = $false }
 }
 
 $script:FriendlyHints = @{
@@ -164,6 +175,7 @@ $script:FriendlyHints = @{
     Format            = "That quality is not offered for this video. Lower videoQuality or disable useHEVC."
     Transient         = "YouTube asked for the request to be sent again - retrying."
     Network           = "Network issue detected. Check your connection and retry."
+    Incomplete        = "The download finished but the file could not be read back (truncated, empty, or missing a stream). The link stays queued, so the next run resumes it."
     Other             = "Download failed. Verify the link works in your browser and try again."
 }
 
@@ -271,6 +283,145 @@ function Get-RecentFileBytes {
         if ($file.LastWriteTime -ge $Since) { $total += $file.Length }
     }
     return $total
+}
+
+# A download that reports success can still be unusable: a full disk, a killed
+# ffmpeg or a truncated merge leaves a broken file behind, and yt-dlp only answers
+# for its own exit code. Links are retired the moment an item is called ok, so an
+# unchecked file would be recorded as acquired and the URL dropped for good.
+$script:VideoMediaExtensions = @(".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v")
+$script:AudioMediaExtensions = @(".mp3", ".m4a", ".flac", ".opus", ".ogg", ".oga", ".wav", ".aac")
+
+function Get-NewMediaFiles {
+    param([string]$Path, [datetime]$Since, [string]$DownloadType)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    $extensions = if ($DownloadType -eq "audio") { $script:AudioMediaExtensions } else { $script:VideoMediaExtensions }
+    # Two seconds of slack: FAT/exFAT timestamps only have that much resolution. A
+    # file missed here is reported as "nothing new" rather than as a failure, which
+    # is the safe direction - it never deletes anything on a guess.
+    $threshold = $Since.AddSeconds(-2)
+    return @(Get-ChildItem -LiteralPath $Path -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $extensions -contains $_.Extension.ToLower() -and $_.LastWriteTime -ge $threshold })
+}
+
+function Test-MediaFileIntegrity {
+    param([string]$Path, [string]$DownloadType)
+
+    $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    if (-not $item) { return [pscustomobject]@{ Ok = $false; Reason = "the file is missing" } }
+    if ($item.Length -le 0) { return [pscustomobject]@{ Ok = $false; Reason = "the file is empty" } }
+
+    # Without ffprobe there is no verdict, so the size check has to be enough.
+    if (-not $script:FfprobePath -or -not (Test-Path -LiteralPath $script:FfprobePath)) {
+        return [pscustomobject]@{ Ok = $true; Reason = "" }
+    }
+
+    # Started through .NET for the same reason yt-dlp is: under Windows PowerShell
+    # 5.1 a native stderr redirect raises NativeCommandError, which would make the
+    # verdict depend on $ErrorActionPreference instead of ffprobe's exit code.
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $script:FfprobePath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $startInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+    Set-ProcessArguments -StartInfo $startInfo -Arguments @(
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-show_entries", "stream=codec_type",
+        "-of", "default=noprint_wrappers=1",
+        "-i", $Path
+    )
+
+    $process = $null
+    try {
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        $probeText = $process.StandardOutput.ReadToEnd()
+        $probeError = $errorTask.Result
+        $process.WaitForExit()
+        $probeExit = $process.ExitCode
+    }
+    catch {
+        return [pscustomobject]@{ Ok = $false; Reason = "ffprobe could not run - $($_.Exception.Message)" }
+    }
+    finally {
+        if ($process) { $process.Dispose() }
+    }
+
+    # A truncated MP4 loses its moov atom, so ffprobe refuses to read it at all.
+    if ($probeExit -ne 0) {
+        $detail = @($probeError -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+        $detailText = ""
+        if ($detail.Count -gt 0) {
+            $detailText = ([string]$detail[0] -replace '^\s*\[[^\]]*\]\s*', '').Trim()
+            if ($detailText.Length -gt 120) { $detailText = $detailText.Substring(0, 120).TrimEnd() + "..." }
+        }
+        $reason = "ffprobe cannot read it (truncated or corrupt container)"
+        if ($detailText) { $reason = "$reason - $detailText" }
+        return [pscustomobject]@{ Ok = $false; Reason = $reason }
+    }
+
+    $probeLines = @($probeText -split "`r?`n")
+
+    $streamTypes = @()
+    $duration = $null
+    foreach ($lineText in $probeLines) {
+        $text = [string]$lineText
+        if ($text -match '^\s*codec_type=(\S+)') { $streamTypes += $matches[1].ToLower() }
+        elseif ($text -match '^\s*duration=([0-9]+(?:\.[0-9]+)?)') { $duration = [double]$matches[1] }
+    }
+
+    $expected = if ($DownloadType -eq "audio") { "audio" } else { "video" }
+    if ($streamTypes -notcontains $expected) {
+        return [pscustomobject]@{ Ok = $false; Reason = "no $expected stream in the finished file" }
+    }
+    if ($null -ne $duration -and $duration -le 0) {
+        return [pscustomobject]@{ Ok = $false; Reason = "the file reports zero duration" }
+    }
+
+    return [pscustomobject]@{ Ok = $true; Reason = "" }
+}
+
+# Returns $null when the finished download is usable, or a failure record for the
+# retry loop. Only files created by this run are examined, and an unusable one is
+# removed first: a final file left on disk would make yt-dlp answer "already
+# downloaded" on the resume attempt and report success without fetching a byte.
+function Confirm-DownloadedMedia {
+    param(
+        [string]$OutputDir,
+        [datetime]$Since,
+        [string]$DownloadType,
+        [string]$Url,
+        [hashtable]$Settings
+    )
+
+    $candidates = @(Get-NewMediaFiles -Path $OutputDir -Since $Since -DownloadType $DownloadType |
+        Sort-Object LastWriteTime -Descending)
+    if ($candidates.Count -eq 0) {
+        # Nothing was written: yt-dlp skipped an item it already had. That is a
+        # normal result, not a reason to keep the link queued forever.
+        return $null
+    }
+
+    foreach ($candidate in $candidates) {
+        $check = Test-MediaFileIntegrity -Path $candidate.FullName -DownloadType $DownloadType
+        if ($check.Ok) { continue }
+
+        $reason = "$($candidate.Name) - $($check.Reason)"
+        Write-ReaperLog -Settings $Settings -Message "[Incomplete] $Url :: $reason"
+        Show-ProgressUpdate "[!] Discarded unusable file: $reason" -Type "Warning"
+        Remove-Item -LiteralPath $candidate.FullName -Force -ErrorAction SilentlyContinue
+        return [pscustomobject]@{
+            Kind      = "Incomplete"
+            ErrorText = "ERROR: the finished file is unusable - $reason"
+        }
+    }
+
+    return $null
 }
 
 function Get-ConsoleWidth {
@@ -658,6 +809,39 @@ function Show-SimpleSettingsPage {
     }
 }
 
+# Command-line overrides win over settings.json, so a one-off run does not need the
+# file edited (and remembered to be changed back).
+function Apply-CliOverrides {
+    param([hashtable]$Settings)
+
+    if (-not [string]::IsNullOrWhiteSpace($VideoQuality)) {
+        $allowedQuality = @("720p", "1080p", "1440p", "4K")
+        if ($VideoQuality -in $allowedQuality) {
+            $Settings.videoQuality = $VideoQuality
+        }
+        else {
+            Show-ProgressUpdate "[!] Ignoring -VideoQuality '$VideoQuality' (use 720p, 1080p, 1440p or 4K)." -Type "Warning"
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($AudioFormat)) {
+        $requestedFormat = $AudioFormat.ToLowerInvariant()
+        $allowedFormats = @("mp3", "m4a", "flac", "opus", "wav")
+        if ($requestedFormat -in $allowedFormats) {
+            $Settings.audioFormat = $requestedFormat
+        }
+        else {
+            Show-ProgressUpdate "[!] Ignoring -AudioFormat '$AudioFormat' (use mp3, m4a, flac, opus or wav)." -Type "Warning"
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($OutputFolder)) {
+        $Settings.outputFolder = $OutputFolder.Trim()
+    }
+
+    return $Settings
+}
+
 function Get-BaseOutputDir {
     param([hashtable]$Settings)
     if ($Settings.outputFolder -and -not [string]::IsNullOrWhiteSpace($Settings.outputFolder)) {
@@ -785,6 +969,108 @@ function Install-YtDlp {
     }
 }
 
+# ffmpeg is taken from PATH on Linux, but a first run should end ready to use
+# rather than stop and ask for a package install, so a missing binary is fetched
+# as a static build into engine/ - no root, no package manager - the same way
+# Windows gets one. The Linux assets are per-architecture, and the plain "linux64"
+# name is x86_64 only, so an ARM box must not receive it.
+function Get-FfmpegLinuxAssetName {
+    $architecture = $null
+    try { $architecture = [string][System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture } catch { }
+    switch ($architecture) {
+        "X64"   { "ffmpeg-master-latest-linux64-gpl.tar.xz" }
+        "Arm64" { "ffmpeg-master-latest-linuxarm64-gpl.tar.xz" }
+        default { $null }
+    }
+}
+
+function Install-FfmpegStatic {
+    param([string[]]$MissingTools)
+
+    $assetName = Get-FfmpegLinuxAssetName
+    if (-not $assetName) {
+        Show-ProgressUpdate "[!] No prebuilt ffmpeg is published for this CPU architecture." -Type "Warning"
+        return $false
+    }
+
+    Show-ProgressUpdate "[~] $($MissingTools -join ' and ') not on PATH - downloading a static build (no root needed, this may take a minute)..." -Type "Update"
+
+    # Keep the engine copies in their own variables: $script:FfmpegPath may still
+    # point at a distribution binary in /usr/bin, and a failed install must never
+    # delete anything outside engine/.
+    $engineFfmpeg = Join-Path $script:EngineDir $script:FfmpegBinaryName
+    $engineFfprobe = Join-Path $script:EngineDir $script:FfprobeBinaryName
+    $archiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$assetName"
+    $archivePath = Join-Path ([System.IO.Path]::GetTempPath()) "ffmpeg-reaper.tar.xz"
+    $extractPath = Join-Path ([System.IO.Path]::GetTempPath()) "ffmpeg-reaper"
+
+    try {
+        # PowerShell has no tar.xz support built in, and GNU tar detects the
+        # compression on extraction by itself.
+        $tar = Get-Command tar -ErrorAction SilentlyContinue
+        if (-not $tar) { throw "tar is required to unpack the archive." }
+
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                if (Test-Path $archivePath) { Remove-Item $archivePath -Force -ErrorAction SilentlyContinue }
+                Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath -TimeoutSec 600 -ErrorAction Stop
+                break
+            }
+            catch {
+                if ($attempt -eq 3) { throw }
+                Show-ProgressUpdate "[!] ffmpeg download failed, retrying ($attempt/3)..." -Type "Warning"
+                Start-Sleep -Seconds (2 * $attempt)
+            }
+        }
+
+        $archive = Get-Item $archivePath -ErrorAction SilentlyContinue
+        if (-not $archive -or $archive.Length -eq 0) { throw "Downloaded archive is empty." }
+
+        if (Test-Path $extractPath) { Remove-Item $extractPath -Recurse -Force }
+        New-Item -Path $extractPath -ItemType Directory -Force | Out-Null
+        Show-ProgressUpdate "[~] Extracting ffmpeg archive..." -Type "System"
+        $null = & $tar.Source -xf $archivePath -C $extractPath 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "tar could not unpack the archive (exit code $LASTEXITCODE)." }
+
+        # Both binaries live together in the bin/ folder of the top-level folder.
+        $ffmpegSource = Get-ChildItem -Path $extractPath -Filter $script:FfmpegBinaryName -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $ffmpegSource) { throw "$($script:FfmpegBinaryName) not found inside the archive." }
+        $ffprobeSource = Get-ChildItem -Path $extractPath -Filter $script:FfprobeBinaryName -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $ffprobeSource) { throw "$($script:FfprobeBinaryName) not found inside the archive." }
+
+        if (-not (Test-Path $script:EngineDir)) { New-Item -Path $script:EngineDir -ItemType Directory -Force | Out-Null }
+        Copy-Item $ffmpegSource.FullName  $engineFfmpeg  -Force -ErrorAction Stop
+        Copy-Item $ffprobeSource.FullName $engineFfprobe -Force -ErrorAction Stop
+        if (-not (Set-ExecutablePermission -Path $engineFfmpeg)) { throw "Could not mark ffmpeg as executable." }
+        if (-not (Set-ExecutablePermission -Path $engineFfprobe)) { throw "Could not mark ffprobe as executable." }
+
+        # Prove the copies run before they become the binaries everything else uses.
+        $script:FfmpegPath = $engineFfmpeg
+        $script:FfprobePath = $engineFfprobe
+        $null = & $script:FfmpegPath -version 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed functional verification (exit code $LASTEXITCODE)." }
+        $null = & $script:FfprobePath -version 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "ffprobe failed functional verification (exit code $LASTEXITCODE)." }
+
+        Show-ProgressUpdate "[+] ffmpeg and ffprobe installed" -Type "Success"
+        return $true
+    }
+    catch {
+        Show-ProgressUpdate "[!] Automatic ffmpeg install failed: $($_.Exception.Message)" -Type "Error"
+        # Remove partial copies so the next launch retries cleanly, and drop back to
+        # a distribution binary when one is still on PATH.
+        Remove-Item $engineFfmpeg  -Force -ErrorAction SilentlyContinue
+        Remove-Item $engineFfprobe -Force -ErrorAction SilentlyContinue
+        $script:FfmpegPath = (Get-Command ffmpeg -ErrorAction SilentlyContinue).Source
+        $script:FfprobePath = (Get-Command ffprobe -ErrorAction SilentlyContinue).Source
+        return $false
+    }
+    finally {
+        Remove-Item $archivePath -Force -ErrorAction SilentlyContinue
+        Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Install-Ffmpeg {
     if (-not $script:IsWindowsPlatform) {
         Show-ProgressUpdate "[~] Linux detected - checking for system ffmpeg/ffprobe..." -Type "Update"
@@ -794,8 +1080,10 @@ function Install-Ffmpeg {
         if (-not $systemFfmpeg) { $missingTools += "ffmpeg" }
         if (-not $systemFfprobe) { $missingTools += "ffprobe" }
         if ($missingTools.Count -gt 0) {
+            if (Install-FfmpegStatic -MissingTools $missingTools) { return $true }
+
             Show-ProgressUpdate "[!] Missing required tool(s): $($missingTools -join ', ')." -Type "Error"
-            Show-ProgressUpdate "[!] Install ffmpeg package using your package manager:" -Type "Error"
+            Show-ProgressUpdate "[!] Install the ffmpeg package instead:" -Type "Error"
             Show-ProgressUpdate "    Ubuntu/Debian: sudo apt install ffmpeg" -Type "Warning"
             Show-ProgressUpdate "    Fedora:        sudo dnf install ffmpeg" -Type "Warning"
             Show-ProgressUpdate "    Arch:          sudo pacman -S ffmpeg" -Type "Warning"
@@ -1276,7 +1564,8 @@ function Get-YtDlpArgs {
         [string]$DownloadType,   # "audio" or "video"
         [string]$OutputDir,
         [string]$OutputTemplate = "",
-        [switch]$UseFallbackFormat
+        [switch]$UseFallbackFormat,
+        [int]$HeightOverride = 0
     )
 
     $ytDlpArgs = New-Object System.Collections.Generic.List[string]
@@ -1350,12 +1639,19 @@ function Get-YtDlpArgs {
     else {
         $codecPreference = if ($Settings.useHEVC) { "[vcodec^=hevc]/[vcodec^=h265]/" } else { "" }
 
-        $height = switch ($Settings.videoQuality) {
-            "720p" { 720 }
-            "1080p" { 1080 }
-            "1440p" { 1440 }
-            "4K" { 2160 }
-            default { 1080 }
+        # A height override comes from the quality ladder: a retry asks for a lower
+        # resolution than the configured one without editing the settings.
+        $height = if ($HeightOverride -gt 0) {
+            $HeightOverride
+        }
+        else {
+            switch ($Settings.videoQuality) {
+                "720p" { 720 }
+                "1080p" { 1080 }
+                "1440p" { 1440 }
+                "4K" { 2160 }
+                default { 1080 }
+            }
         }
 
         $videoSelector = "bestvideo[height<=$height]"
@@ -1674,6 +1970,100 @@ function Write-WarningLog {
     Write-ReaperLog -Settings $Settings -Message "warnings($Count) $Url :: $first"
 }
 
+# Written at the end of every batch, interactive and playlist run. The log already
+# records one line per run, but a scheduled pass has nobody to ask follow-up
+# questions, so the failures keep their URL and their hint here.
+function Write-RunState {
+    param(
+        [hashtable]$Settings,
+        [string]$Mode,
+        [int]$SuccessCount,
+        [int]$FailureCount,
+        [string[]]$Failures = @(),
+        [double]$TotalBytes = 0,
+        [TimeSpan]$Elapsed = [TimeSpan]::Zero,
+        [string]$OutputDir = ""
+    )
+
+    try {
+        if (-not (Test-Path $script:EngineDir)) { return }
+        $state = [ordered]@{
+            finishedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+            mode       = $Mode
+            ok         = $SuccessCount
+            failed     = $FailureCount
+            bytes      = [int64]$TotalBytes
+            seconds    = [int][Math]::Round($Elapsed.TotalSeconds)
+            outputDir  = $OutputDir
+            dryRun     = [bool]$DryRun
+            failures   = @($Failures | Select-Object -First 20)
+        }
+        $json = $state | ConvertTo-Json -Depth 4
+        Set-Content -Path $script:RunStateFile -Value $json -Encoding UTF8 -ErrorAction Stop
+    }
+    catch {
+        # A bookkeeping file must never fail the run it describes.
+    }
+}
+
+function Show-LastRunStatus {
+    Write-Host ""
+    Write-Rule
+    Write-Host "   LAST RUN" -ForegroundColor Cyan
+    Write-Rule
+
+    if (-not (Test-Path $script:RunStateFile)) {
+        Write-Line -Text "   No completed run recorded yet." -Color "DarkGray"
+        Write-Rule
+        Write-Host ""
+        return 0
+    }
+
+    try {
+        $state = Get-Content -Path $script:RunStateFile -Raw | ConvertFrom-Json
+    }
+    catch {
+        Show-ProgressUpdate "[!] $script:RunStateFile is unreadable - it is rewritten at the end of the next run." -Type "Warning"
+        return 0
+    }
+
+    $okCount = [int]$state.ok
+    $failedCount = [int]$state.failed
+    Write-Line ("   finished   " + $state.finishedAt) -Color "Gray"
+    Write-Line ("   mode       " + $state.mode) -Color "Gray"
+    Write-Line ("   acquired   " + $okCount) -Color $(if ($okCount -gt 0) { "Green" } else { "DarkGray" })
+    Write-Line ("   missed     " + $failedCount) -Color $(if ($failedCount -gt 0) { "Red" } else { "DarkGray" })
+    if ([double]$state.bytes -gt 0) {
+        Write-Line ("   size       " + (Format-FileSize -Bytes ([double]$state.bytes))) -Color "Gray"
+    }
+    if ([int]$state.seconds -gt 0) {
+        Write-Line ("   elapsed    " + (Format-Elapsed -Span ([TimeSpan]::FromSeconds([double]$state.seconds)))) -Color "Gray"
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$state.outputDir)) {
+        Write-Line ("   output     " + $state.outputDir) -Color "Gray"
+    }
+    if ($state.dryRun) {
+        Write-Line "   (dry run - nothing was downloaded)" -Color "Yellow"
+    }
+
+    $runFailures = @($state.failures | Where-Object { $_ })
+    if ($runFailures.Count -gt 0) {
+        Write-Rule
+        foreach ($entry in ($runFailures | Select-Object -First 5)) {
+            Write-Line ("   ! " + $entry) -Color "Yellow"
+        }
+        if ($runFailures.Count -gt 5) {
+            Write-Line ("   ! ...and " + ($runFailures.Count - 5) + " more in $script:RunStateFile") -Color "DarkGray"
+        }
+    }
+
+    Write-Rule
+    Write-Host ""
+
+    if ($failedCount -gt 0) { return 1 }
+    return 0
+}
+
 function Write-ReaperLog {
     param([string]$Message, [hashtable]$Settings)
     if (-not $Settings -or -not $Settings.diagnosticsLog) { return }
@@ -1699,6 +2089,93 @@ function Write-ReaperLog {
 
 # Args are rebuilt on every attempt so that a policy change made by the bot
 # guard (new player client, single-threaded) actually reaches the next call.
+# One yt-dlp invocation plus the read-back check, shared by the quality ladder and
+# the last-resort format so both report a failure the same way.
+function Invoke-YtDlpAttempt {
+    param(
+        [hashtable]$Settings,
+        [string]$DownloadType,
+        [string]$OutputDir,
+        [string]$Url,
+        [string]$OutputTemplate = "",
+        [switch]$NoPlaylist,
+        [switch]$UseFallbackFormat,
+        [int]$HeightOverride = 0,
+        [string[]]$ExtraArgs = @(),
+        [datetime]$VerifySince
+    )
+
+    $ytArgs = New-Object System.Collections.Generic.List[string]
+    foreach ($argItem in (Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir -OutputTemplate $OutputTemplate -UseFallbackFormat:$UseFallbackFormat -HeightOverride $HeightOverride)) {
+        $ytArgs.Add([string]$argItem)
+    }
+    if ($NoPlaylist) { $ytArgs.Add("--no-playlist") }
+    foreach ($extraArg in $ExtraArgs) { $ytArgs.Add([string]$extraArg) }
+    $ytArgs.Add($Url)
+
+    $capture = Invoke-YtDlpAndCapture -YtDlpArgs $ytArgs.ToArray()
+    if (-not $capture.Success) {
+        $errorText = [string]$capture.ErrorText
+        return [pscustomobject]@{
+            Success   = $false
+            ErrorText = $errorText
+            Kind      = (Get-FailureKind -ErrorText $errorText)
+            Digest    = (Get-ErrorDigest -ErrorText $errorText)
+            Warnings  = 0
+        }
+    }
+
+    # "Exit code 0" is not the same as "the file is usable".
+    $mediaFailure = Confirm-DownloadedMedia -OutputDir $OutputDir -Since $VerifySince -DownloadType $DownloadType -Url $Url -Settings $Settings
+    if ($mediaFailure) {
+        $errorText = [string]$mediaFailure.ErrorText
+        return [pscustomobject]@{
+            Success   = $false
+            ErrorText = $errorText
+            Kind      = [string]$mediaFailure.Kind
+            Digest    = (Get-ErrorDigest -ErrorText $errorText)
+            Warnings  = 0
+        }
+    }
+
+    Register-BotGuardSuccess
+    $warningCount = ([regex]::Matches([string]$capture.ErrorText, '(?m)^\s*WARNING')).Count
+    Write-WarningLog -Url $Url -WarningText ([string]$capture.ErrorText) -Count $warningCount -Settings $Settings
+    return [pscustomobject]@{
+        Success   = $true
+        ErrorText = [string]$capture.ErrorText
+        Kind      = ""
+        Digest    = ""
+        Warnings  = $warningCount
+    }
+}
+
+# Resolutions to step down through when the requested quality is not offered.
+# Two rungs is enough to recover a typical "requested format is not available"
+# without turning one bad video into six downloads.
+function Get-QualityLadder {
+    param(
+        [string]$VideoQuality,
+        [int]$HeightOverride = 0
+    )
+
+    $heights = @(2160, 1440, 1080, 720, 480, 360)
+    $current = if ($HeightOverride -gt 0) {
+        $HeightOverride
+    }
+    else {
+        switch ($VideoQuality) {
+            "720p" { 720 }
+            "1080p" { 1080 }
+            "1440p" { 1440 }
+            "4K" { 2160 }
+            default { 1080 }
+        }
+    }
+
+    return @($heights | Where-Object { $_ -lt $current } | Select-Object -First 2)
+}
+
 function Invoke-YtDlpForUrl {
     param(
         [hashtable]$Settings,
@@ -1708,7 +2185,8 @@ function Invoke-YtDlpForUrl {
         [string]$OutputTemplate = "",
         [switch]$NoPlaylist,
         [switch]$UseFallbackFormat,
-        [string[]]$ExtraArgs = @()
+        [string[]]$ExtraArgs = @(),
+        [int]$HeightOverride = 0
     )
 
     $maxAttempts = [int](Format-InvariantNumber -Value $Settings.outerRetryCount -Default $script:DefaultOuterRetryCount)
@@ -1718,6 +2196,10 @@ function Invoke-YtDlpForUrl {
     $attempt = 0
     $lastErrorText = ""
     $lastKind = "Other"
+
+    # Files older than this were already on disk before the download started, so
+    # they are never treated as the product of this attempt.
+    $verifySince = Get-Date
 
     while ($attempt -lt $maxAttempts) {
         $attempt++
@@ -1732,22 +2214,39 @@ function Invoke-YtDlpForUrl {
         foreach ($extraArg in $ExtraArgs) { $ytArgs.Add([string]$extraArg) }
         $ytArgs.Add($Url)
 
-        $attemptResult = Invoke-YtDlpAndCapture -YtDlpArgs $ytArgs.ToArray()
-        if ($attemptResult.Success) {
-            Register-BotGuardSuccess
-            $warningCount = ([regex]::Matches([string]$attemptResult.ErrorText, '(?m)^\s*WARNING')).Count
-            Write-WarningLog -Url $Url -WarningText ([string]$attemptResult.ErrorText) -Count $warningCount -Settings $Settings
-            return [pscustomobject]@{
-                Success   = $true
-                ErrorText = [string]$attemptResult.ErrorText
-                Kind      = ""
-                Digest    = ""
-                Warnings  = $warningCount
-            }
+        if ($DryRun) {
+            # Nothing is spawned and no link is retired: the point is to show exactly
+            # what this item would ask yt-dlp for.
+            $rendered = (@($ytArgs.ToArray()) | ForEach-Object { ConvertTo-CommandLineArgument -Value ([string]$_) }) -join ' '
+            Show-ProgressUpdate "[~] would run: $script:YtDlpBinaryName $rendered" -Type "System"
+            return [pscustomobject]@{ Success = $true; ErrorText = ""; Kind = ""; Digest = ""; Warnings = 0; DryRun = $true }
         }
 
-        $lastErrorText = [string]$attemptResult.ErrorText
-        $lastKind = Get-FailureKind -ErrorText $lastErrorText
+        $attemptResult = Invoke-YtDlpAndCapture -YtDlpArgs $ytArgs.ToArray()
+        if ($attemptResult.Success) {
+            # "Exit code 0" is not the same as "the file is usable".
+            $mediaFailure = Confirm-DownloadedMedia -OutputDir $OutputDir -Since $verifySince -DownloadType $DownloadType -Url $Url -Settings $Settings
+            if ($mediaFailure) {
+                $lastErrorText = [string]$mediaFailure.ErrorText
+                $lastKind = [string]$mediaFailure.Kind
+            }
+            else {
+                Register-BotGuardSuccess
+                $warningCount = ([regex]::Matches([string]$attemptResult.ErrorText, '(?m)^\s*WARNING')).Count
+                Write-WarningLog -Url $Url -WarningText ([string]$attemptResult.ErrorText) -Count $warningCount -Settings $Settings
+                return [pscustomobject]@{
+                    Success   = $true
+                    ErrorText = [string]$attemptResult.ErrorText
+                    Kind      = ""
+                    Digest    = ""
+                    Warnings  = $warningCount
+                }
+            }
+        }
+        else {
+            $lastErrorText = [string]$attemptResult.ErrorText
+            $lastKind = Get-FailureKind -ErrorText $lastErrorText
+        }
 
         $policy = $null
         if ($script:RetryPolicy.ContainsKey($lastKind)) { $policy = $script:RetryPolicy[$lastKind] }
@@ -1769,33 +2268,30 @@ function Invoke-YtDlpForUrl {
         Start-Sleep -Seconds $delay
     }
 
-    # A different format selector cannot fix a wall or a login gate, so only try
-    # the fallback when the failure could actually be format-related.
-    if ($DownloadType -eq "video" -and -not $UseFallbackFormat -and $lastKind -notin @("BotCheck", "LoginRequired", "GeoBlocked", "Unavailable")) {
-        Show-ProgressUpdate "[~] Trying fallback format for this video..." -Type "Update"
-        $fallbackArgs = New-Object System.Collections.Generic.List[string]
-        foreach ($argItem in (Get-YtDlpArgs -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir -OutputTemplate $OutputTemplate -UseFallbackFormat)) {
-            $fallbackArgs.Add([string]$argItem)
+    # A different selector cannot fix a wall or a login gate, so only try a lower
+    # quality when the failure could actually be format-related. Incomplete is
+    # excluded too: a broken file is not a format problem, and downloading it
+    # again under a different selector would just waste a request.
+    $blockingKinds = @("BotCheck", "LoginRequired", "GeoBlocked", "Unavailable", "Incomplete")
+    if ($DownloadType -eq "video" -and -not $UseFallbackFormat -and $lastKind -notin $blockingKinds) {
+        # Step down before giving up on the video: a 4K request whose 2160p stream is
+        # missing should land at 1440p, not silently at whatever "best" happens to be.
+        foreach ($rung in (Get-QualityLadder -VideoQuality $Settings.videoQuality -HeightOverride $HeightOverride)) {
+            if ($lastKind -in $blockingKinds) { break }
+            Show-ProgressUpdate "[~] $($rung)p did not work - retrying at a lower quality..." -Type "Update"
+            $rungOutcome = Invoke-YtDlpAttempt -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir -Url $Url -OutputTemplate $OutputTemplate -NoPlaylist:$NoPlaylist -HeightOverride $rung -ExtraArgs $ExtraArgs -VerifySince $verifySince
+            if ($rungOutcome.Success) { return $rungOutcome }
+            $lastErrorText = [string]$rungOutcome.ErrorText
+            $lastKind = [string]$rungOutcome.Kind
         }
-        if ($NoPlaylist) { $fallbackArgs.Add("--no-playlist") }
-        foreach ($extraArg in $ExtraArgs) { $fallbackArgs.Add([string]$extraArg) }
-        $fallbackArgs.Add($Url)
 
-        $fallbackResult = Invoke-YtDlpAndCapture -YtDlpArgs $fallbackArgs.ToArray()
-        if ($fallbackResult.Success) {
-            Register-BotGuardSuccess
-            $warningCount = ([regex]::Matches([string]$fallbackResult.ErrorText, '(?m)^\s*WARNING')).Count
-            Write-WarningLog -Url $Url -WarningText ([string]$fallbackResult.ErrorText) -Count $warningCount -Settings $Settings
-            return [pscustomobject]@{
-                Success   = $true
-                ErrorText = [string]$fallbackResult.ErrorText
-                Kind      = ""
-                Digest    = ""
-                Warnings  = $warningCount
-            }
+        if ($lastKind -notin $blockingKinds) {
+            Show-ProgressUpdate "[~] Trying fallback format for this video..." -Type "Update"
+            $fallbackOutcome = Invoke-YtDlpAttempt -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir -Url $Url -OutputTemplate $OutputTemplate -NoPlaylist:$NoPlaylist -UseFallbackFormat -ExtraArgs $ExtraArgs -VerifySince $verifySince
+            if ($fallbackOutcome.Success) { return $fallbackOutcome }
+            $lastErrorText = [string]$fallbackOutcome.ErrorText
+            $lastKind = [string]$fallbackOutcome.Kind
         }
-        $lastErrorText = [string]$fallbackResult.ErrorText
-        $lastKind = Get-FailureKind -ErrorText $lastErrorText
     }
 
     $finalDigest = Get-ErrorDigest -ErrorText $lastErrorText
@@ -2405,7 +2901,12 @@ function Process-LinkFile {
             $itemElapsed = Format-Elapsed -Span ((Get-Date) - $itemStart)
             if ($downloadResult.Success) {
                 $successCount++
-                Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Warnings $downloadResult.Warnings
+                if ($DryRun) {
+                    Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Detail "dry run - link stays queued"
+                }
+                else {
+                    Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Warnings $downloadResult.Warnings
+                }
                 # Unhook the link the moment it lands. Waiting for the end of the
                 # file meant an interrupted, or a multi-hour, run left finished
                 # links queued in audioLinks.txt / videoLinks.txt.
@@ -2445,6 +2946,8 @@ function Remove-SuccessfulLinks {
         [string[]]$SuccessUrls
     )
     if (-not $FilePath -or -not (Test-Path -LiteralPath $FilePath) -or -not $SuccessUrls -or $SuccessUrls.Count -eq 0) { return }
+    # A dry run must leave every queue exactly as it found it.
+    if ($DryRun) { return }
     # Read raw and write UTF-8 so a link file with non-ASCII comments survives the
     # rewrite instead of coming back as ANSI mojibake. LiteralPath because a
     # user-chosen folder such as "Downloads [old]" would otherwise be a wildcard.
@@ -2485,7 +2988,16 @@ function Show-MissionSummary {
     Write-Host "   MISSION SUMMARY" -ForegroundColor Cyan
     Write-Rule
 
-    Write-Host ("   acquired   " + $SuccessCount) -ForegroundColor $(if ($SuccessCount -gt 0) { "Green" } else { "DarkGray" })
+    if ($DryRun) {
+        Write-Host "   mode       dry run (nothing downloaded, links untouched)" -ForegroundColor Yellow
+    }
+
+    if ($DryRun) {
+        Write-Host ("   would fetch " + $SuccessCount) -ForegroundColor "Yellow"
+    }
+    else {
+        Write-Host ("   acquired   " + $SuccessCount) -ForegroundColor $(if ($SuccessCount -gt 0) { "Green" } else { "DarkGray" })
+    }
     Write-Host ("   missed     " + $FailureCount) -ForegroundColor $(if ($FailureCount -gt 0) { "Red" } else { "DarkGray" })
     if ($TotalBytes -gt 0) {
         Write-Host ("   size       " + (Format-FileSize -Bytes $TotalBytes)) -ForegroundColor Gray
@@ -2580,6 +3092,8 @@ function Run-BatchMode {
 
     # Scheduled runs report into a hidden window, so leave one line behind that
     # says whether last night's pass actually did anything.
+    Write-RunState -Settings $Settings -Mode "batch" -SuccessCount $batchSuccess -FailureCount $batchFailure `
+        -Failures $batchFailures -TotalBytes $batchBytes -Elapsed ((Get-Date) - $startedAt) -OutputDir $summaryDir
     Write-ReaperLog -Settings $Settings -Message "batch run: $batchSuccess ok, $batchFailure failed"
 }
 
@@ -2715,6 +3229,7 @@ function Run-InteractiveMode {
                     Remove-SuccessfulLinks -FilePath $script:SourceFile -SuccessUrls @($urls[0])
                 }
                 Show-MissionSummary -SuccessCount $plResult.Success -FailureCount $plResult.Failure -OutputDir $plResult.OutputDir
+                Write-RunState -Settings $Settings -Mode "playlist" -SuccessCount $plResult.Success -FailureCount $plResult.Failure -OutputDir $plResult.OutputDir
                 Write-ReaperLog -Settings $Settings -Message "playlist run: $($plResult.Success) ok, $($plResult.Failure) failed :: $($plResult.OutputDir)"
                 return
             }
@@ -2773,7 +3288,12 @@ function Run-InteractiveMode {
             $itemElapsed = Format-Elapsed -Span ((Get-Date) - $itemStart)
             if ($downloadResult.Success) {
                 $successCount++
-                Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Warnings $downloadResult.Warnings
+                if ($DryRun) {
+                    Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Detail "dry run - link stays queued"
+                }
+                else {
+                    Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Warnings $downloadResult.Warnings
+                }
                 # Retire the link as soon as it finishes, not at the end of the run:
                 # a stopped run should never keep links that already downloaded.
                 Remove-SuccessfulLinks -FilePath $script:SourceFile -SuccessUrls @($url)
@@ -2797,6 +3317,8 @@ function Run-InteractiveMode {
     Show-MissionSummary -SuccessCount $successCount -FailureCount $failureCount -OutputDir $outputDir `
         -Failures $failures -TotalBytes (Get-RecentFileBytes -Path $outputDir -Since $startedAt) -Elapsed ((Get-Date) - $startedAt)
 
+    Write-RunState -Settings $Settings -Mode "interactive" -SuccessCount $successCount -FailureCount $failureCount `
+        -Failures $failures -TotalBytes (Get-RecentFileBytes -Path $outputDir -Since $startedAt) -Elapsed ((Get-Date) - $startedAt) -OutputDir $outputDir
     Write-ReaperLog -Settings $Settings -Message "run: $successCount ok, $failureCount failed :: $outputDir"
 }
 
@@ -3073,6 +3595,12 @@ function Invoke-Doctor {
 try {
     Clear-Console
 
+    # -Status reports the last completed run and touches nothing else, so it works
+    # before the engine is installed and from a cron job that already failed.
+    if ($Status) {
+        exit ([int](Show-LastRunStatus))
+    }
+
     # /doctor is a diagnostic pass, not a run: no install, no lock, no download.
     if ($Doctor) {
         $doctorSettings = Load-Settings -ConfigPath $ConfigFile
@@ -3095,6 +3623,7 @@ try {
     }
 
     $settings = Load-Settings -ConfigPath $ConfigFile
+    $settings = Apply-CliOverrides -Settings $settings
     Reset-BotGuard -Settings $settings
 
     # One session lock for every mode (batch, interactive, scheduled).
@@ -3111,7 +3640,9 @@ try {
     # over the same output file.
     Stop-OrphanedEngineProcesses
 
-    if ($settings.autoUpdate) {
+    # A dry run downloads nothing, so it should not spend time replacing the engine
+    # either.
+    if ($settings.autoUpdate -and -not $DryRun) {
         Update-YtDlpSilent
     }
 

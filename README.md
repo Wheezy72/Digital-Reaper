@@ -17,7 +17,11 @@ Repository: https://github.com/Wheezy72/Digital-Reaper
 - Live download progress (speed and ETA)
 - Optional scheduled automation via `scheduler.bat`
 - Playlist mode downloads a whole playlist in one pass, with numbered files and resume
+- Every finished file is verified with `ffprobe` before its link is retired, so a truncated or empty download stays queued instead of counting as acquired
 - Adaptive bot-check handling: failures are classified, then the request changes instead of being retried unchanged
+- Automatic quality ladder: a missing resolution steps down to the next two lower ones before the last-resort `best` format
+- `-DryRun` prints the exact `yt-dlp` command for every queued link without downloading anything or retiring a link
+- `-Status` reports the last completed run (counts, failures and hints) from `engine/last-run.json`
 - Built-in doctor (`digitalReaper.bat /doctor`) checks the engine, the JS runtime, cookies and a live extraction
 
 ## Requirements
@@ -25,8 +29,8 @@ Repository: https://github.com/Wheezy72/Digital-Reaper
 - Windows 10/11 with PowerShell 5.1+ or Linux with PowerShell 7+
 - Internet connection
 - `ffmpeg` and `ffprobe`
-  - Windows: installed by setup
-  - Linux: must already be installed on your system
+  - Taken from `PATH` when your system already has them, otherwise downloaded into `engine/` on first run (both platforms)
+  - No root and no package-manager step required
 - Optional but recommended: `node` or `deno` on your PATH. Current `yt-dlp` needs a JavaScript runtime for YouTube and silently drops formats without one. Digital Reaper detects either automatically.
 
 ## Setup (Run Once)
@@ -43,13 +47,13 @@ Repository: https://github.com/Wheezy72/Digital-Reaper
 ### Linux
 
 1. Download or clone this repository.
-2. Install prerequisites (`pwsh`, `ffmpeg`, `ffprobe`) if missing.
+2. Install `pwsh` if it is missing (`ffmpeg` and `ffprobe` are handled on first run).
 3. In the project folder, run:
    - `chmod +x setup.sh digitalReaper.sh`
    - `./setup.sh`
 4. Wait for setup to finish.
 
-`yt-dlp` is downloaded into `engine/` and marked executable by setup. `ffmpeg` and `ffprobe` come from your distribution and are picked up from `PATH`; there is nothing to copy into `engine/`. On ARM (Raspberry Pi, ARM servers) the matching `yt-dlp` build is chosen automatically.
+`yt-dlp` is downloaded into `engine/` and marked executable by setup. `ffmpeg` and `ffprobe` are used from `PATH` when your distribution already provides them; when they are missing, setup downloads a static build into `engine/` as well, so a fresh install needs no package manager and no root. On ARM (Raspberry Pi, ARM servers) the matching `yt-dlp` and `ffmpeg` builds are chosen automatically; prebuilt ffmpeg exists for x86_64 and arm64 only, so any other architecture still gets the package-manager instructions instead.
 
 ## How to Run
 
@@ -76,6 +80,29 @@ Paste or queue a playlist URL like any other link - in `audioLinks.txt` / `video
 - Re-running the same playlist only fills the gaps; finished items are skipped.
 - The summary reports what is on disk (`40/40`), so a resumed playlist is not reported as failed.
 - A partially failed playlist keeps its URL in `audioLinks.txt` / `videoLinks.txt`, so the next run retries only the missing items.
+
+### Command-line options
+
+`digitalReaper.bat` (Windows) and `./digitalReaper.sh` (Linux) pass extra arguments straight to the script:
+
+```bat
+digitalReaper.bat -DryRun
+```
+
+| Option | What it does |
+| --- | --- |
+| `-LinksFile <path>` | Download the URLs in that file instead of the queues. |
+| `-ConfigFile <path>` | Use that manifest/settings file. |
+| `-Silent` | Unattended run: no prompts, failures reach the caller as an exit code. |
+| `-DryRun` | Print the exact `yt-dlp` command for each item, download nothing, retire no links. |
+| `-Status` | Print the last completed run from `engine/last-run.json` and exit (code 1 if it had failures). |
+| `-VideoQuality <720p\|1080p\|1440p\|4K>` | Override `videoQuality` for this run. |
+| `-AudioFormat <mp3\|m4a\|flac\|opus\|wav>` | Override `audioFormat` for this run. |
+| `-OutputFolder <path>` | Override `outputFolder` for this run. |
+| `-Doctor` | Run the self-check. |
+| `-SetupOnly` | Install or update the engine, then exit. |
+
+Overrides apply to that run only - `settings.json` is never rewritten, and an invalid value is ignored with a warning.
 
 ### Interactive mode
 
@@ -106,6 +133,8 @@ Registration writes the exact command `"<engine>" -NoProfile -ExecutionPolicy By
 ```
 
 A silent pass exits non-zero only when it fails outright, and each run leaves a `run:` / `batch run:` summary in `engine/reaper.log`, so `tail engine/reaper.log` answers whether the last pass did anything.
+
+Every completed run also writes `engine/last-run.json` (time, mode, counts, size, elapsed and up to 20 failures with their hints). `pwsh -NoProfile -File digitalReaper.ps1 -Status` prints it and exits non-zero when that run had failures, which is the quickest way to check a scheduled pass that reported nothing.
 
 ## Configuration
 
@@ -139,7 +168,7 @@ Detailed setting descriptions are in `downloads/settings.txt`.
 YouTube sometimes answers a download with "Sign in to confirm you're not a bot". Digital Reaper classifies the failure instead of retrying blindly:
 
 1. The error is classified: bot check, 403, 429, login wall, geo block, missing format, transient or network.
-2. Only failures that can change are retried: a different player client, a longer backoff, then one cooldown. A quality that is not offered is retried with backoff only, because it is not a bot signal and should not push the whole run into cautious mode.
+2. Only failures that can change are retried: a different player client, a longer backoff, then one cooldown. A quality that is not offered is retried with backoff only, because it is not a bot signal and should not push the whole run into cautious mode. If the resolution is still missing, the run steps down to the next two lower ones (4K to 1440p and 1080p, 1080p to 720p and 480p) before the last-resort `best` format.
 3. If every fallback client is refused, the run stops and says that cookies are required.
 4. Two bot checks in one run switch to cautious mode: single-threaded fragments and 10-20 second pauses. Two clean downloads in a row clear it again, so one bad video does not slow down the rest of the run.
 
@@ -225,6 +254,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 - Confirm URL is valid and publicly accessible.
 - Try removing query parameters after `?`.
 - Check internet stability.
+- A finished file that cannot be read back (empty, truncated, or missing its audio/video stream) is reported as a failure and its link stays in the list. The next run resumes it instead of skipping an unusable file.
 
 ### Settings do not load
 
