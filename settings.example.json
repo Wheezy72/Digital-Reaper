@@ -17,7 +17,7 @@
     "oneClickMode": true,
     "outerRetryCount": 3,
     "outputFolder": "",
-    "outputTemplate": "[%(upload_date)s] %(title)s [%(id)s].%(ext)s",
+    "outputTemplate": "%(title)s.%(ext)s",
     "playerClients": [],
     "requestSleep": 1,
     "retryCount": 8,

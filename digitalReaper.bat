@@ -1,5 +1,5 @@
 @echo off
-title DIGITAL REAPER - YouTube Harvester
+title DIGITAL REAPER - MEDIA DOWNLOADER
 color 07
 
 REM Prefer PowerShell 7 when it is installed: it starts faster and does not wrap

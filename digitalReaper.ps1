@@ -1,6 +1,6 @@
 ﻿<#
 ========================================================================
-    DIGITAL REAPER -Video/Audio Downloader
+    DIGITAL REAPER: LINK HARVESTER
     Custom tool for grabbing content with style
     Made by Wheezy for Wheezy
 ========================================================================
@@ -489,7 +489,7 @@ function Show-StartupSequence {
     # compact mark instead. Same identity, no broken rows.
     if ($width -lt 95) {
         Write-Host "  ==========================================================" -ForegroundColor DarkRed
-        Write-Host "    DIGITAL REAPER  -  LINK HARVESTER" -ForegroundColor DarkRed
+        Write-Host "    DIGITAL REAPER: LINK HARVESTER" -ForegroundColor DarkRed
         Write-Host "  ==========================================================" -ForegroundColor DarkRed
         Write-Host ""
         return
@@ -638,7 +638,7 @@ function Get-DefaultSettings {
         useHEVC             = $true
         downloadSubtitles   = $false
         subtitleLanguages   = @("en", "en-US")
-        outputTemplate      = "[%(upload_date)s] %(title)s [%(id)s].%(ext)s"
+        outputTemplate      = "%(title)s.%(ext)s"
         autoUpdate          = $true
         oneClickMode        = $true
         defaultDownloadType = "video"
@@ -1175,6 +1175,74 @@ function Install-Ffmpeg {
     }
 }
 
+# Starting the tool from a launcher on PATH used to mean creating a wrapper and
+# editing PATH by hand. Setup does both now: dr.cmd in %LOCALAPPDATA%\DigitalReaper\bin
+# on Windows, an executable dr in ~/.local/bin on Linux. Idempotent, and a failure
+# is only a warning.
+function Get-CommandShortcutContent {
+    param(
+        [string]$LauncherPath,
+        [switch]$Posix
+    )
+    if ($Posix) { return "#!/usr/bin/env bash`nexec `"$LauncherPath`" `"`$@`"`n" }
+    return "@echo off`r`ncall `"$LauncherPath`" %*`r`n"
+}
+
+function Install-CommandShortcut {
+    $onWindows = [bool]$script:IsWindowsPlatform
+    $launcher = Join-Path $PSScriptRoot $(if ($onWindows) { "digitalReaper.bat" } else { "digitalReaper.sh" })
+    if (-not (Test-Path $launcher)) { return }
+
+    try {
+        if ($onWindows) {
+            $binDir = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "DigitalReaper\bin"
+            $shortcutPath = Join-Path $binDir "dr.cmd"
+            $content = Get-CommandShortcutContent -LauncherPath $launcher
+        }
+        else {
+            $binDir = Join-Path $HOME ".local/bin"
+            $shortcutPath = Join-Path $binDir "dr"
+            $content = Get-CommandShortcutContent -LauncherPath $launcher -Posix
+        }
+
+        Ensure-Directory -Path $binDir
+        $changed = $false
+
+        $existing = if (Test-Path $shortcutPath) { [string](Get-Content -Path $shortcutPath -Raw -ErrorAction SilentlyContinue) } else { "" }
+        if ($existing -ne $content) {
+            Set-Content -Path $shortcutPath -Value $content -Encoding ASCII -NoNewline
+            if (-not $onWindows) { $null = & chmod 755 $shortcutPath 2>&1 }
+            $changed = $true
+        }
+
+        if ($onWindows) {
+            $userPath = [string][Environment]::GetEnvironmentVariable("Path", "User")
+            $entries = @($userPath -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $alreadyListed = @($entries | Where-Object { $_.Trim().TrimEnd("\") -eq $binDir.TrimEnd("\") }).Count -gt 0
+            if (-not $alreadyListed) {
+                [Environment]::SetEnvironmentVariable("Path", ((@($entries) + $binDir) -join ";"), "User")
+                $env:Path = "$env:Path;$binDir"
+                $changed = $true
+            }
+        }
+        else {
+            $alreadyListed = @($env:PATH -split ":" | Where-Object { $_ -and $_.TrimEnd("/") -eq $binDir.TrimEnd("/") }).Count -gt 0
+            if (-not $alreadyListed) {
+                # No profile editing from here, just the line worth adding.
+                Show-ProgressUpdate "[~] Add $binDir to PATH to run 'dr' from anywhere." -Type "Warning"
+            }
+        }
+
+        if ($changed) {
+            $howTo = if ($onWindows) { "Win+R, type dr, Enter" } else { "run dr in a terminal" }
+            Show-ProgressUpdate "[+] Installed the 'dr' launcher - $howTo." -Type "System"
+        }
+    }
+    catch {
+        Show-ProgressUpdate "[~] Could not install the 'dr' launcher: $($_.Exception.Message)" -Type "Warning"
+    }
+}
+
 function Initialize-DigitalReaper {
     Show-ProgressUpdate "DIGITAL REAPER initializing..." -Type "System"
     
@@ -1191,33 +1259,23 @@ function Initialize-DigitalReaper {
     Ensure-Directory -Path $script:AudioOutputDir
     Ensure-Directory -Path $script:VideoOutputDir
 
+    if (-not $Silent) { Install-CommandShortcut }
+
     # Create starter link files if they don't exist
     if (-not (Test-Path $script:AudioLinksFile)) {
         @(
-            "# DIGITAL REAPER - Audio Links",
-            "# Add one YouTube/SoundCloud/etc URL per line.",
-            "# Lines starting with # are ignored.",
-            "# Successfully downloaded links are removed automatically.",
-            "# Failed links are kept so you can retry.",
-            "#",
-            "# Example:",
-            "# https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+            "# Audio links - one URL per line",
+            "# Finished links are removed, failed ones stay for another run"
         ) | Set-Content $script:AudioLinksFile
-        Show-ProgressUpdate "[+] Created audioLinks.txt with usage guide" -Type "System"
+        Show-ProgressUpdate "[+] Created audioLinks.txt" -Type "System"
     }
 
     if (-not (Test-Path $script:VideoLinksFile)) {
         @(
-            "# DIGITAL REAPER - Video Links",
-            "# Add one YouTube/etc URL per line.",
-            "# Lines starting with # are ignored.",
-            "# Successfully downloaded links are removed automatically.",
-            "# Failed links are kept so you can retry.",
-            "#",
-            "# Example:",
-            "# https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+            "# Video links - one URL per line",
+            "# Finished links are removed, failed ones stay for another run"
         ) | Set-Content $script:VideoLinksFile
-        Show-ProgressUpdate "[+] Created videoLinks.txt with usage guide" -Type "System"
+        Show-ProgressUpdate "[+] Created videoLinks.txt" -Type "System"
     }
     
     if (-not (Test-Path $script:YtDlpPath)) {
@@ -1512,7 +1570,7 @@ function Invoke-PlaylistDownload {
     # away yt-dlp's own resume and back-off handling.
     $padWidth = [Math]::Max(2, $meta.EntryCount.ToString().Length)
     $indexFormat = "%(playlist_index)0" + $padWidth + "d"
-    $itemTemplate = "$indexFormat - %(title)s [%(id)s].%(ext)s"
+    $itemTemplate = "$indexFormat - %(title)s.%(ext)s"
 
     $startedAt = Get-Date
     $downloadResult = Invoke-YtDlpForUrl -Settings $Settings -DownloadType $DownloadType `
@@ -1557,6 +1615,70 @@ function Invoke-PlaylistDownload {
 # ===================================================================
 # --- YT-DLP ARGUMENT BUILDER & BATCH HELPERS ---
 # ===================================================================
+
+# A title-only name is ambiguous: two different videos can share a title, and
+# yt-dlp answers the second one with "has already been downloaded" instead of
+# fetching it. So the download carries the video id, and the id is dropped again
+# once the file is on disk - unless the clean name is taken, where the id is the
+# only thing that keeps both videos. Set by Add-ClashGuardToTemplate.
+$script:ClashGuardActive = $false
+
+function Add-ClashGuardToTemplate {
+    param([string]$Template)
+
+    $script:ClashGuardActive = $false
+    if ([string]::IsNullOrWhiteSpace($Template)) { return $Template }
+    # A template that already tells items apart needs nothing added, and a user's
+    # own %(id)s must never be stripped afterwards.
+    if ($Template -match '%\(id\)s' -or $Template -match '%\(playlist_index' -or $Template -match '%\(autonumber') { return $Template }
+
+    $marker = '.%(ext)s'
+    $markerIndex = $Template.LastIndexOf($marker)
+    if ($markerIndex -lt 0) { return $Template }
+
+    $script:ClashGuardActive = $true
+    return $Template.Substring(0, $markerIndex) + ' [%(id)s]' + $Template.Substring($markerIndex)
+}
+
+function ConvertTo-CleanDownloadName {
+    param([string]$Name)
+
+    # "Title [dQw4w9WgXcQ].mp4" -> "Title.mp4", and the same for "[id].en.srt".
+    $match = [regex]::Match($Name, '^(?<base>.+) \[(?<id>[A-Za-z0-9_-]{6,})\](?<ext>\..+)$')
+    if (-not $match.Success) { return "" }
+    return $match.Groups['base'].Value + $match.Groups['ext'].Value
+}
+
+# Runs only for names this script tagged, so a user's own %(id)s stays put.
+function Rename-DownloadsToCleanNames {
+    param([string]$OutputDir, [datetime]$Since)
+
+    if (-not $script:ClashGuardActive) { return }
+    if (-not (Test-Path -LiteralPath $OutputDir)) { return }
+
+    # Same slack as Get-NewMediaFiles: FAT timestamps are coarse.
+    $threshold = $Since.AddSeconds(-2)
+    $files = @(Get-ChildItem -LiteralPath $OutputDir -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -ge $threshold })
+
+    foreach ($file in $files) {
+        $cleanName = ConvertTo-CleanDownloadName -Name $file.Name
+        if (-not $cleanName -or $cleanName -eq $file.Name) { continue }
+
+        $target = Join-Path -Path $OutputDir -ChildPath $cleanName
+        if (Test-Path -LiteralPath $target) {
+            Show-ProgressUpdate "[!] '$cleanName' is taken - kept the id in $($file.Name)" -Type "Warning"
+            continue
+        }
+
+        try {
+            Move-Item -LiteralPath $file.FullName -Destination $target -ErrorAction Stop
+        }
+        catch {
+            # A locked file just keeps its id; the download itself is fine.
+        }
+    }
+}
 
 function Get-YtDlpArgs {
     param(
@@ -1673,6 +1795,7 @@ function Get-YtDlpArgs {
     }
 
     $template = if ($OutputTemplate) { $OutputTemplate } else { $Settings.outputTemplate }
+    $template = Add-ClashGuardToTemplate -Template $template
     $outputPath = Join-Path -Path $OutputDir -ChildPath $template
     $ytDlpArgs.Add("-o")
     $ytDlpArgs.Add($outputPath)
@@ -2138,6 +2261,9 @@ function Invoke-YtDlpAttempt {
         }
     }
 
+    # The file is valid, so the temporary id can go now (unless the title is taken).
+    Rename-DownloadsToCleanNames -OutputDir $OutputDir -Since $VerifySince
+
     Register-BotGuardSuccess
     $warningCount = ([regex]::Matches([string]$capture.ErrorText, '(?m)^\s*WARNING')).Count
     Write-WarningLog -Url $Url -WarningText ([string]$capture.ErrorText) -Count $warningCount -Settings $Settings
@@ -2231,6 +2357,8 @@ function Invoke-YtDlpForUrl {
                 $lastKind = [string]$mediaFailure.Kind
             }
             else {
+                Rename-DownloadsToCleanNames -OutputDir $OutputDir -Since $verifySince
+
                 Register-BotGuardSuccess
                 $warningCount = ([regex]::Matches([string]$attemptResult.ErrorText, '(?m)^\s*WARNING')).Count
                 Write-WarningLog -Url $Url -WarningText ([string]$attemptResult.ErrorText) -Count $warningCount -Settings $Settings
@@ -3059,6 +3187,7 @@ function Run-BatchMode {
 
     # The session lock is taken once in the main block, so batch, interactive and
     # scheduled runs can no longer overlap.
+    $script:LastRunFailures = 0
     $batchSuccess = 0
     $batchFailure = 0
     $batchFailures = @()
@@ -3095,6 +3224,7 @@ function Run-BatchMode {
     Write-RunState -Settings $Settings -Mode "batch" -SuccessCount $batchSuccess -FailureCount $batchFailure `
         -Failures $batchFailures -TotalBytes $batchBytes -Elapsed ((Get-Date) - $startedAt) -OutputDir $summaryDir
     Write-ReaperLog -Settings $Settings -Message "batch run: $batchSuccess ok, $batchFailure failed"
+    $script:LastRunFailures = $batchFailure
 }
 
 function Run-InteractiveMode {
@@ -3107,6 +3237,7 @@ function Run-InteractiveMode {
     # reset, a URL typed in a later menu round could be removed from whichever
     # file the previous round happened to use.
     $script:SourceFile = ""
+    $script:LastRunFailures = 0
 
     $urls = @()
     $usedOneClick = $false
@@ -3124,7 +3255,7 @@ function Run-InteractiveMode {
     if ($shouldUseOneClickMode) {
         $usedOneClick = $true
         while ($urls.Count -eq 0) {
-            Write-Host "Paste a YouTube/media link and press Enter." -ForegroundColor Yellow
+            Write-Host "Paste a media link and press Enter." -ForegroundColor Yellow
             Write-Host "Type ""file"" to choose a .txt link file, or ""settings"" for quick options." -ForegroundColor DarkGray
             $quickInput = (Read-Host).Trim()
             if ([string]::IsNullOrWhiteSpace($quickInput)) {
@@ -3179,17 +3310,27 @@ function Run-InteractiveMode {
     Show-ProgressUpdate "Loaded $($urls.Count) target(s) for processing" -Type "Success"
 
     # --- Ask user: audio or video ---
-    $downloadType = if ($usedOneClick -or $Silent) {
-        if ($Settings.defaultDownloadType -eq "audio") { "2" } else { "1" }
-    }
-    else {
-        ""
-    }
-    if (-not $usedOneClick -and -not $Silent) {
+    # A pasted link now asks too, so one link can go straight to audio or video
+    # without editing a link file first. Enter keeps the configured default, so
+    # one-click runs still take one keystroke.
+    $defaultType = if ($Settings.defaultDownloadType -eq "audio") { "2" } else { "1" }
+    $downloadType = if ($Silent) { $defaultType } else { "" }
+    if (-not $Silent) {
+        $typeOptions = if ($defaultType -eq "2") {
+            "1=Video, 2=Audio Only (Enter = Audio)"
+        } else {
+            "1=Video, 2=Audio Only (Enter = Video)"
+        }
         while ($downloadType -notin @("1", "2")) {
-            Show-MenuOption -Prompt "Select Download Type" -Options "1=Video, 2=Audio Only"
-            $downloadType = Read-Host
-            if ($downloadType -notin @("1", "2")) {
+            Show-MenuOption -Prompt "Select Download Type" -Options $typeOptions
+            $typeChoice = ([string](Read-Host)).Trim()
+            if ([string]::IsNullOrWhiteSpace($typeChoice)) {
+                $downloadType = $defaultType
+            }
+            elseif ($typeChoice -in @("1", "2")) {
+                $downloadType = $typeChoice
+            }
+            else {
                 Write-Host ""
                 Show-ProgressUpdate "[!] Invalid choice. Enter 1 for Video or 2 for Audio." -Type "Warning"
             }
@@ -3231,6 +3372,7 @@ function Run-InteractiveMode {
                 Show-MissionSummary -SuccessCount $plResult.Success -FailureCount $plResult.Failure -OutputDir $plResult.OutputDir
                 Write-RunState -Settings $Settings -Mode "playlist" -SuccessCount $plResult.Success -FailureCount $plResult.Failure -OutputDir $plResult.OutputDir
                 Write-ReaperLog -Settings $Settings -Message "playlist run: $($plResult.Success) ok, $($plResult.Failure) failed :: $($plResult.OutputDir)"
+                $script:LastRunFailures = $plResult.Failure
                 return
             }
             # If playlist probe failed, fall through to normal single-URL download
@@ -3320,18 +3462,88 @@ function Run-InteractiveMode {
     Write-RunState -Settings $Settings -Mode "interactive" -SuccessCount $successCount -FailureCount $failureCount `
         -Failures $failures -TotalBytes (Get-RecentFileBytes -Path $outputDir -Since $startedAt) -Elapsed ((Get-Date) - $startedAt) -OutputDir $outputDir
     Write-ReaperLog -Settings $Settings -Message "run: $successCount ok, $failureCount failed :: $outputDir"
+    $script:LastRunFailures = $failureCount
 }
 
 function Show-ExitPrompt {
+    param(
+        [int]$FailureCount = 0,
+        [int]$TimeoutSeconds = -1
+    )
+
+    # "Run again" only earns its place when the last run left work behind: it
+    # retries the links that are still queued (or the explicit -LinksFile) as a
+    # batch, which "Download another item" cannot do. After a clean run it did
+    # exactly the same thing as option 3, so offering both was a duplicate.
+    $leftQueued = if ($LinksFile -or $ConfigFile) { $true } else { Should-RunBatchMode }
+    $offerRetry = ($FailureCount -gt 0) -and $leftQueued
+
+    $options = @(
+        @{ Key = "close"; Label = "Close terminal" }
+    )
+    if ($offerRetry) {
+        $options += @{ Key = "retry"; Label = "Run again (retry the queued links)" }
+    }
+    $options += @{ Key = "quick"; Label = "Download another item" }
+
+    # A clean run has nothing to retry, so an untouched window should close itself
+    # instead of waiting forever; a run with work left should pick the useful option.
+    $cleanRun = ($FailureCount -le 0)
+    $autoKey = if ($cleanRun) { "close" } elseif ($offerRetry) { "retry" } else { "quick" }
+    $autoLabel = switch ($autoKey) {
+        "close" { "close" }
+        "retry" { "Run again" }
+        default { "Download another item" }
+    }
+
+    # -1 means "use the default wait": 60s after a clean run, 30s when work is left.
+    # 0 answers immediately without reading keys (tests and non-console hosts).
+    if ($TimeoutSeconds -lt 0) { $TimeoutSeconds = if ($cleanRun) { 60 } else { 30 } }
+    $timedInput = ($TimeoutSeconds -gt 0) -and
+        ($script:ExitPromptAutoContinue -ne $false) -and
+        -not [Console]::IsInputRedirected
+
     while ($true) {
         Write-Host ""
         Write-Host "What do you want to do next?" -ForegroundColor Yellow
-        Write-Host "1) Close terminal" -ForegroundColor White
-        Write-Host "2) Run again" -ForegroundColor White
-        Write-Host "3) Download another item" -ForegroundColor White
-        $choice = Read-Host "Choose (1-3)"
-        if ($choice -in @("1", "2", "3")) { return $choice }
-        Show-ProgressUpdate "[!] Invalid choice. Enter 1, 2, or 3." -Type "Warning"
+        for ($i = 0; $i -lt $options.Count; $i++) {
+            Write-Host (("{0}) {1}" -f ($i + 1), $options[$i].Label)) -ForegroundColor White
+        }
+
+        if ($timedInput) {
+            Write-Host ("Press 1-{0}, or wait {1}s to {2}." -f $options.Count, $TimeoutSeconds, $autoLabel.ToLower()) -ForegroundColor DarkGray
+            $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+            $picked = $null
+            while (-not $picked -and (Get-Date) -lt $deadline) {
+                if ([Console]::KeyAvailable) {
+                    $pressed = [Console]::ReadKey($true)
+                    $index = 0
+                    if ([int]::TryParse([string]$pressed.KeyChar, [ref]$index) -and $index -ge 1 -and $index -le $options.Count) {
+                        $picked = $options[$index - 1].Key
+                    }
+                    elseif ($pressed.Key -eq [ConsoleKey]::Escape) {
+                        $picked = "close"
+                    }
+                }
+                if (-not $picked) {
+                    $left = [Math]::Max(0, [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds))
+                    Write-Host ("`r   {0} in {1,2}s ...   " -f $autoLabel, $left) -NoNewline -ForegroundColor DarkGray
+                    Start-Sleep -Milliseconds 250
+                }
+            }
+            if (-not $picked) { $picked = $autoKey }
+            Write-Host ""
+            return $picked
+        }
+
+        if ($TimeoutSeconds -le 0) { return $autoKey }
+
+        $choice = Read-Host ("Choose (1-{0})" -f $options.Count)
+        $index = 0
+        if ([int]::TryParse(([string]$choice).Trim(), [ref]$index) -and $index -ge 1 -and $index -le $options.Count) {
+            return $options[$index - 1].Key
+        }
+        Show-ProgressUpdate ("[!] Invalid choice. Enter 1-{0}." -f $options.Count) -Type "Warning"
     }
 }
 
@@ -3648,7 +3860,19 @@ try {
 
     $nextMode = "auto"
     $shouldExit = $false
+    $freshAttempt = $false
     while (-not $shouldExit) {
+        # A run started from the end-of-run menu gets what a relaunch gives it: a
+        # clean bot-guard (default player-client order, no cautious sleeps, no
+        # cooldown), no leftover yt-dlp, and a pending engine update. Runs used to
+        # inherit the exhausted state of the previous one, which pinned the last
+        # fallback client and kept failing until the window was closed.
+        if ($freshAttempt) {
+            Reset-BotGuard -Settings $settings
+            Stop-OrphanedEngineProcesses
+            if ($settings.autoUpdate -and -not $DryRun) { Update-YtDlpSilent }
+        }
+
         if ($nextMode -eq "quick") {
             Run-InteractiveMode -Settings $settings -ForceOneClick
         }
@@ -3661,11 +3885,11 @@ try {
 
         if ($Silent) { break }
 
-        $postAction = Show-ExitPrompt
+        $postAction = Show-ExitPrompt -FailureCount $script:LastRunFailures
         switch ($postAction) {
-            "1" { $shouldExit = $true }
-            "2" { $nextMode = "auto" }
-            "3" { $nextMode = "quick" }
+            "close" { $shouldExit = $true }
+            "retry" { $nextMode = "auto"; $freshAttempt = $true }
+            "quick" { $nextMode = "quick"; $freshAttempt = $true }
         }
     }
 

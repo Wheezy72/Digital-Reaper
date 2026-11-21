@@ -1,89 +1,47 @@
 # Digital Reaper
 
-Custom YouTube/media downloader built by Wheezy.
+Media downloader built by Wheezy.
 
 Repository: https://github.com/Wheezy72/Digital-Reaper
 
-## Features
+## What it does
 
-- High-quality video downloads (720p, 1080p, 1440p, 4K)
-- Audio extraction (MP3, M4A, FLAC)
-- Subtitle support (including auto-generated)
-- Optional HEVC/H.265 output
-- Configurable settings via `settings.json`
-- Auto-update support for `yt-dlp`
-- Batch downloads from `audioLinks.txt` and `videoLinks.txt`
-- JSON manifest/job file support
-- Live download progress (speed and ETA)
-- Optional scheduled automation via `scheduler.bat`
-- Playlist mode downloads a whole playlist in one pass, with numbered files and resume
-- Every finished file is verified with `ffprobe` before its link is retired, so a truncated or empty download stays queued instead of counting as acquired
-- Adaptive bot-check handling: failures are classified, then the request changes instead of being retried unchanged
-- Automatic quality ladder: a missing resolution steps down to the next two lower ones before the last-resort `best` format
-- `-DryRun` prints the exact `yt-dlp` command for every queued link without downloading anything or retiring a link
-- `-Status` reports the last completed run (counts, failures and hints) from `engine/last-run.json`
-- Built-in doctor (`digitalReaper.bat /doctor`) checks the engine, the JS runtime, cookies and a live extraction
+Downloads video and audio from any site `yt-dlp` supports. You can queue links in two text files, paste one link, or drop a JSON manifest on the launcher. Playlists download in one pass and resume where they stopped. Every finished file is checked with `ffprobe` before its link is removed from the queue, so a broken download stays queued for the next run.
 
-## Requirements
+When YouTube refuses a download, the run changes the request instead of repeating it: another player client, a longer pause, one cooldown, then it asks for cookies. Settings, failures and hints are logged to `engine/reaper.log` and `engine/last-run.json`.
 
-- Windows 10/11 with PowerShell 5.1+ or Linux with PowerShell 7+
-- Internet connection
-- `ffmpeg` and `ffprobe`
-  - Taken from `PATH` when your system already has them, otherwise downloaded into `engine/` on first run (both platforms)
-  - No root and no package-manager step required
-- Optional but recommended: `node` or `deno` on your PATH. Current `yt-dlp` needs a JavaScript runtime for YouTube and silently drops formats without one. Digital Reaper detects either automatically.
+## Install
 
-## Setup (Run Once)
-
-### Windows
+Windows:
 
 1. Download or clone this repository.
-2. In the project folder, run:
-   - `setup.bat` (double-click), or
-   - `setup.ps1` from PowerShell.
-3. Wait for setup to finish.
-4. Optional: run `cleanup.bat` to hide internal helper files.
+2. Double-click `setup.bat` and wait for it to finish.
 
-### Linux
+Setup puts `yt-dlp`, `ffmpeg` and `ffprobe` in `engine/`, creates the link files, and installs a `dr` launcher. After that, Win+R, type `dr`, Enter starts the tool from anywhere.
 
-1. Download or clone this repository.
-2. Install `pwsh` if it is missing (`ffmpeg` and `ffprobe` are handled on first run).
-3. In the project folder, run:
-   - `chmod +x setup.sh digitalReaper.sh`
-   - `./setup.sh`
-4. Wait for setup to finish.
+Linux:
 
-`yt-dlp` is downloaded into `engine/` and marked executable by setup. `ffmpeg` and `ffprobe` are used from `PATH` when your distribution already provides them; when they are missing, setup downloads a static build into `engine/` as well, so a fresh install needs no package manager and no root. On ARM (Raspberry Pi, ARM servers) the matching `yt-dlp` and `ffmpeg` builds are chosen automatically; prebuilt ffmpeg exists for x86_64 and arm64 only, so any other architecture still gets the package-manager instructions instead.
+1. Install `pwsh` (PowerShell 7).
+2. `chmod +x setup.sh digitalReaper.sh`
+3. `./setup.sh`
 
-## How to Run
+The launcher is written to `~/.local/bin/dr`. Add that folder to PATH if it is not there already and `dr` works like on Windows.
 
-### Fastest method (link files)
+Requirements: Windows 10/11 with PowerShell 5.1 or newer, or Linux with PowerShell 7. `ffmpeg` is taken from PATH when you already have it and downloaded into `engine/` otherwise. A JavaScript runtime (`node` or `deno`) is recommended because current `yt-dlp` needs one for YouTube.
 
-1. Add audio URLs to `audioLinks.txt` (one URL per line).
-2. Add video URLs to `videoLinks.txt` (one URL per line).
-3. Run `digitalReaper.bat` (Windows) or `./digitalReaper.sh` (Linux).
-4. Files are saved under `downloads/audio/` and `downloads/videos/`.
+## Use it
 
-Both launchers also accept a file path, so `digitalReaper.bat job.json` and `./digitalReaper.sh job.json` run a manifest directly.
+Start with `dr`, `digitalReaper.bat` or `./digitalReaper.sh`.
 
-### Single job with custom settings (manifest)
+Queue files: put one URL per line in `audioLinks.txt` or `videoLinks.txt` and start the tool. Files land in `downloads/audio/` and `downloads/videos/`. Finished links are removed from the file, failed ones stay.
 
-1. Create a JSON file with a `links` array (example: `job.json`).
-2. Add any overrides like `videoQuality`, `useHEVC`, or subtitle settings.
-3. Drag and drop the JSON file onto `digitalReaper.bat`, or pass it to `./digitalReaper.sh`.
+Pasted link: there is no queue, so the tool asks for the type. `1` is video, `2` is audio, and Enter takes `defaultDownloadType`.
 
-### Playlist downloads
+After a run the menu offers another item, and Run again when the previous run left failures queued. Press a number to choose. If you leave a successful run alone for a minute the window closes itself. If a run had failures, thirty seconds of silence starts the retry instead. Escape closes the window while the countdown is up.
 
-Paste or queue a playlist URL like any other link - in `audioLinks.txt` / `videoLinks.txt`, in a manifest `links` array, or typed interactively. A single playlist URL is enough; it no longer has to be mixed with other links. Digital Reaper reports the playlist, then downloads it in one pass:
+File names are the video title, nothing else: `Lucia Has Bigger Problems Than Money - GTA VI Walkthrough #7.mp4`. Playlist items keep their position, `01 - Title.mp4`, so the order survives. When two different videos share a title, the second one keeps its id, `Title [dQw4w9WgXcQ].mp4`, so neither is lost or skipped.
 
-- Files are numbered in playlist order (`01 - Title [id].mp4`, or `.mp3` in audio mode), inside a folder named after the playlist plus its ID, so two playlists with the same title never share a folder.
-- Re-running the same playlist only fills the gaps; finished items are skipped.
-- The summary reports what is on disk (`40/40`), so a resumed playlist is not reported as failed.
-- A partially failed playlist keeps its URL in `audioLinks.txt` / `videoLinks.txt`, so the next run retries only the missing items.
-
-### Command-line options
-
-`digitalReaper.bat` (Windows) and `./digitalReaper.sh` (Linux) pass extra arguments straight to the script:
+## Options
 
 ```bat
 digitalReaper.bat -DryRun
@@ -91,201 +49,49 @@ digitalReaper.bat -DryRun
 
 | Option | What it does |
 | --- | --- |
-| `-LinksFile <path>` | Download the URLs in that file instead of the queues. |
-| `-ConfigFile <path>` | Use that manifest/settings file. |
-| `-Silent` | Unattended run: no prompts, failures reach the caller as an exit code. |
-| `-DryRun` | Print the exact `yt-dlp` command for each item, download nothing, retire no links. |
-| `-Status` | Print the last completed run from `engine/last-run.json` and exit (code 1 if it had failures). |
-| `-VideoQuality <720p\|1080p\|1440p\|4K>` | Override `videoQuality` for this run. |
-| `-AudioFormat <mp3\|m4a\|flac\|opus\|wav>` | Override `audioFormat` for this run. |
-| `-OutputFolder <path>` | Override `outputFolder` for this run. |
-| `-Doctor` | Run the self-check. |
+| `-LinksFile <path>` | Use that file instead of the queues. |
+| `-ConfigFile <path>` | Use a manifest or settings file. |
+| `-Silent` | No prompts. Failures become the exit code. |
+| `-DryRun` | Print each `yt-dlp` command, download nothing, keep the queue. |
+| `-Status` | Print the last completed run. Exit code 1 when it had failures. |
+| `-Doctor` | Self-check of engine, cookies, folders, lock and a live probe. |
 | `-SetupOnly` | Install or update the engine, then exit. |
+| `-VideoQuality`, `-AudioFormat`, `-OutputFolder` | Override one run. |
 
-Overrides apply to that run only - `settings.json` is never rewritten, and an invalid value is ignored with a warning.
+Overrides never rewrite `settings.json`.
 
-### Interactive mode
+## Settings
 
-If no link files or manifest are provided:
+A fresh clone has no `settings.json`; copy `settings.example.json` to `settings.json`. The script has defaults either way. Common keys:
 
-1. Run `digitalReaper.bat`.
-2. Paste a URL when prompted.
-3. Use `settings` or `file` commands if needed.
+- `oneClickMode`, `defaultDownloadType`
+- `videoQuality`, `audioFormat`, `useHEVC`
+- `outputFolder`, `outputTemplate`
+- `cookieSource`, `cookieFile`
+- `maxRate`, `concurrentFragments`
+- `retryCount`, `outerRetryCount`
+- `autoUpdate`, `diagnosticsLog`
 
-### Scheduled mode (Windows)
+## Playlists
 
-1. Run `scheduler.bat`.
-2. Choose `1` to create/update a schedule.
-3. Select an interval.
-4. Use option `2` to remove the schedule later.
-5. Use option `3` to start one silent background pass right away.
+Paste a playlist URL like any other link. The whole playlist downloads in a single pass into a folder named after it, and running it again only fills the gaps. A playlist that partly failed keeps its URL, so the next run retries only what is missing.
 
-The task is registered with PowerShell 7 when it is installed (full path, because a scheduled task does not inherit the PATH of the window that created it) and with Windows PowerShell otherwise. Re-run option `1` after installing or removing `pwsh` so the task picks up the current engine.
+## Scheduled runs
 
-Registration writes the exact command `"<engine>" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "...\digitalReaper.ps1" -Silent` with run level `Highest available`.
+Windows: `scheduler.bat`, choose an interval, and option 3 for one pass right away.
 
-### Scheduled mode (Linux)
-
-`scheduler.bat` is Windows-only; use `cron` instead. This runs one silent pass every four hours and appends anything unexpected to `engine/cron.log`:
+Linux, every four hours:
 
 ```bash
 0 */4 * * * cd /path/to/Digital-Reaper && pwsh -NoProfile -File digitalReaper.ps1 -Silent >> engine/cron.log 2>&1
 ```
 
-A silent pass exits non-zero only when it fails outright, and each run leaves a `run:` / `batch run:` summary in `engine/reaper.log`, so `tail engine/reaper.log` answers whether the last pass did anything.
+`-Status` is the quickest way to see what the last pass did.
 
-Every completed run also writes `engine/last-run.json` (time, mode, counts, size, elapsed and up to 20 failures with their hints). `pwsh -NoProfile -File digitalReaper.ps1 -Status` prints it and exits non-zero when that run had failures, which is the quickest way to check a scheduled pass that reported nothing.
+## When something breaks
 
-## Configuration
+`dr /doctor` checks the binaries, the JS runtime, cookies, folder permissions, the session lock and a real extraction. Every `[FAIL]` line says what to fix.
 
-Edit `settings.json` to control default behavior.
+If the tool says another instance is running but no window is open, delete `engine/reaper.lock`. If PowerShell blocks the script, run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`.
 
-A fresh clone has no `settings.json` (it is gitignored). Copy `settings.example.json` to `settings.json` first, otherwise the defaults built into the script apply.
-
-Common settings:
-
-- `oneClickMode`
-- `defaultDownloadType` (`video` or `audio`)
-- `outputFolder`
-- `cookieSource` (`none`, `chrome`, `edge`, `firefox`)
-- `maxRate` (default `2M` is roughly 16 Mbit/s; set it to `""` to drop the cap)
-- `concurrentFragments`
-- `retryCount`
-- `outerRetryCount`
-- `cookieFile` (path to an exported `cookies.txt`)
-- `playerClients` (pin a player client, e.g. `["mweb"]`; empty means automatic)
-- `jsRuntime` (empty means auto-detect `deno`/`node`)
-- `requestSleep`, `minSleepInterval`, `maxSleepInterval` (pacing)
-- `maxFragmentRetries` (fragment retry cap, default 20)
-- `botCooldownSeconds` (backoff once every fallback client is refused)
-- `downloadArchive` (skip IDs that were already downloaded)
-- `diagnosticsLog` (append failures to `engine/reaper.log`)
-
-Detailed setting descriptions are in `downloads/settings.txt`.
-
-### Bot checks
-
-YouTube sometimes answers a download with "Sign in to confirm you're not a bot". Digital Reaper classifies the failure instead of retrying blindly:
-
-1. The error is classified: bot check, 403, 429, login wall, geo block, missing format, transient or network.
-2. Only failures that can change are retried: a different player client, a longer backoff, then one cooldown. A quality that is not offered is retried with backoff only, because it is not a bot signal and should not push the whole run into cautious mode. If the resolution is still missing, the run steps down to the next two lower ones (4K to 1440p and 1080p, 1080p to 720p and 480p) before the last-resort `best` format.
-3. If every fallback client is refused, the run stops and says that cookies are required.
-4. Two bot checks in one run switch to cautious mode: single-threaded fragments and 10-20 second pauses. Two clean downloads in a row clear it again, so one bad video does not slow down the rest of the run.
-
-If it keeps happening, give it cookies:
-
-- `cookieFile`: path to an exported `cookies.txt`. Most reliable, and it survives browser cookie-encryption changes.
-- `cookieSource`: `chrome`, `edge` or `firefox` reads cookies straight from that browser.
-
-Failures are written to `engine/reaper.log` when `diagnosticsLog` is on, together with the first warning of any download that had them and a one-line `run:` / `batch run:` / `playlist run:` summary, which is how a silent scheduled pass reports back.
-
-## Project Structure
-
-```text
-Digital-Reaper/
-├── setup.bat
-├── setup.sh
-├── setup.ps1
-├── digitalReaper.bat
-├── digitalReaper.sh
-├── digitalReaper.ps1
-├── settings.json
-├── settings.example.json
-├── audioLinks.txt
-├── videoLinks.txt
-├── cleanup.bat
-├── scheduler.bat
-├── README.md
-├── engine/
-│   ├── yt-dlp(.exe)
-│   ├── ffmpeg(.exe)
-│   └── ffprobe(.exe)
-└── downloads/
-    ├── audio/
-    └── videos/
-```
-
-## Troubleshooting
-
-### Something looks broken
-
-Run the built-in self-check:
-
-```bat
-digitalReaper.bat /doctor
-```
-
-On Linux:
-
-```bash
-./digitalReaper.sh /doctor
-```
-
-It checks the engine binaries, `yt-dlp` version and freshness, the JavaScript runtime, cookie configuration, output folder writability, the session lock and a live metadata extraction. The live extraction uses the same cookies, player client and JavaScript runtime as a real download, so a pass here reflects what downloads will actually do. It exits with code 1 when a hard check fails, and every `[FAIL]` line says what to fix.
-
-### "Another instance is already running"
-
-Digital Reaper writes `engine/reaper.lock` while it runs, so a scheduled task cannot start in the middle of a manual download. If a window was closed abruptly the lock can survive, but it is cleared automatically once the process that wrote it is gone (a recycled process ID is no longer mistaken for a running instance).
-
-If it still blocks and no other window is open, delete `engine/reaper.lock` and start again.
-
-### A window was closed in the middle of a download
-
-Digital Reaper records the `yt-dlp` process it starts in `engine/yt-dlp.pid` and clears the record when that process exits. If a run dies while a download is in flight - the window is closed, the process is killed, the machine loses power - the next launch finds the still-running process through that record and stops it, together with any children it spawned, before starting anything. Two downloads therefore never write into the same `.part` file.
-
-This works the same on Linux through `digitalReaper.sh`, and it has to: a killed run leaves `yt-dlp` reparented to `init` there, so a "is the parent process still alive" check would never find it. On Windows the launch also sweeps any `engine\yt-dlp.exe` whose parent is gone, which catches leftovers the record never saw.
-
-The one case neither check can see is a leftover whose record was deleted along with `engine\` (for example by `cleanup.bat`). If a stray `yt-dlp` is still downloading, stop it by hand before starting the next run.
-
-This mechanism never fails quietly. If the PID record cannot be written, if it holds something that is not a `<pid> <start>` pair, if process start times cannot be read on the platform, or if the recorded PID turns out not to be this install's engine, the run prints a `[!]` line saying which of those happened. A leftover that refuses to die is reported too, instead of being assumed stopped.
-
-To confirm the sweep can work on a given machine, run `/doctor`. Its `leftover sweep` line is `OK` when the PID record can be written and process start times can be read, `FAIL` with the reason otherwise, and a pending record from an earlier run is reported as a warning. That check is how the Linux path (`digitalReaper.sh`, where these primitives come from the runtime instead of WMI) is verified on the machine it actually runs on.
-
-### PowerShell execution policy error
-
-Run in PowerShell:
-
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-### Download fails
-
-- Confirm URL is valid and publicly accessible.
-- Try removing query parameters after `?`.
-- Check internet stability.
-- A finished file that cannot be read back (empty, truncated, or missing its audio/video stream) is reported as a failure and its link stays in the list. The next run resumes it instead of skipping an unusable file.
-
-### Settings do not load
-
-- Validate `settings.json` format.
-- Check `downloads/settings.txt` for valid options.
-- Delete `settings.json` to regenerate defaults.
-
-### Scheduled task issues
-
-- Run `scheduler.bat` as Administrator if task registration fails.
-- Confirm URLs exist in `audioLinks.txt` or `videoLinks.txt`.
-- Check Task Scheduler for `DigitalReaper`.
-- Task Scheduler's defaults still apply: a task does not start on battery power, and it stops if the machine switches to battery. Plug the machine in, or flip those two options in the task's Conditions tab.
-
-## Contributing
-
-1. Fork the repository.
-2. Create a feature branch.
-3. Commit your changes.
-4. Open a pull request.
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
-
-## Acknowledgments
-
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-- [FFmpeg](https://ffmpeg.org/)
-
-## Support
-
-- GitHub profile: https://github.com/Wheezy72
-- Repository: https://github.com/Wheezy72/Digital-Reaper
+A download that fails often needs cookies: set `cookieSource` to `chrome`, `edge` or `firefox`, or point `cookieFile` at an exported `cookies.txt`.
