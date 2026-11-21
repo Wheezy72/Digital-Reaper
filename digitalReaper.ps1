@@ -3316,11 +3316,7 @@ function Run-InteractiveMode {
     $defaultType = if ($Settings.defaultDownloadType -eq "audio") { "2" } else { "1" }
     $downloadType = if ($Silent) { $defaultType } else { "" }
     if (-not $Silent) {
-        $typeOptions = if ($defaultType -eq "2") {
-            "1=Video, 2=Audio Only (Enter = Audio)"
-        } else {
-            "1=Video, 2=Audio Only (Enter = Video)"
-        }
+        $typeOptions = @("1=Video, 2=Audio Only")
         while ($downloadType -notin @("1", "2")) {
             Show-MenuOption -Prompt "Select Download Type" -Options $typeOptions
             $typeChoice = ([string](Read-Host)).Trim()
@@ -3490,12 +3486,6 @@ function Show-ExitPrompt {
     # instead of waiting forever; a run with work left should pick the useful option.
     $cleanRun = ($FailureCount -le 0)
     $autoKey = if ($cleanRun) { "close" } elseif ($offerRetry) { "retry" } else { "quick" }
-    $autoLabel = switch ($autoKey) {
-        "close" { "close" }
-        "retry" { "Run again" }
-        default { "Download another item" }
-    }
-
     # -1 means "use the default wait": 60s after a clean run, 30s when work is left.
     # 0 answers immediately without reading keys (tests and non-console hosts).
     if ($TimeoutSeconds -lt 0) { $TimeoutSeconds = if ($cleanRun) { 60 } else { 30 } }
@@ -3511,7 +3501,6 @@ function Show-ExitPrompt {
         }
 
         if ($timedInput) {
-            Write-Host ("Press 1-{0}, or wait {1}s to {2}." -f $options.Count, $TimeoutSeconds, $autoLabel.ToLower()) -ForegroundColor DarkGray
             $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
             $picked = $null
             while (-not $picked -and (Get-Date) -lt $deadline) {
@@ -3526,8 +3515,6 @@ function Show-ExitPrompt {
                     }
                 }
                 if (-not $picked) {
-                    $left = [Math]::Max(0, [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds))
-                    Write-Host ("`r   {0} in {1,2}s ...   " -f $autoLabel, $left) -NoNewline -ForegroundColor DarkGray
                     Start-Sleep -Milliseconds 250
                 }
             }
