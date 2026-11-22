@@ -22,7 +22,7 @@ Setup puts `yt-dlp`, `ffmpeg` and `ffprobe` in `engine/`, creates the link files
 Linux:
 
 1. Install `pwsh` (PowerShell 7).
-2. `chmod +x setup.sh digitalReaper.sh`
+2. `chmod +x setup.sh digitalReaper.sh scheduler.sh`
 3. `./setup.sh`
 
 The launcher is written to `~/.local/bin/dr`. Add that folder to PATH if it is not there already and `dr` works like on Windows.
@@ -39,7 +39,7 @@ Pasted link: there is no queue, so the tool asks for the type. `1` is video, `2`
 
 After a run the menu offers another item, and Run again when the previous run left failures queued. Press a number to choose. If you leave a successful run alone for a minute the window closes itself. If a run had failures, thirty seconds of silence starts the retry instead. Escape closes the window while the countdown is up.
 
-File names are the video title, nothing else: `Lucia Has Bigger Problems Than Money - GTA VI Walkthrough #7.mp4`. Playlist items keep their position, `01 - Title.mp4`, so the order survives. When two different videos share a title, the second one keeps its id, `Title [dQw4w9WgXcQ].mp4`, so neither is lost or skipped.
+File names are the video title, nothing else: `Lucia Has Bigger Problems Than Money - GTA VI Walkthrough #7.mp4`. Playlist items keep their position, `01 - Title.mp4`, so the order survives. A link you already downloaded is skipped rather than fetched twice, and a transfer that was cut off picks up where it stopped. The tool remembers the video id behind each finished file, so a repeat is still recognised when the video was renamed upstream. The run says `skipped` for those instead of counting them as new downloads.
 
 ## Options
 
@@ -53,7 +53,8 @@ digitalReaper.bat -DryRun
 | `-ConfigFile <path>` | Use a manifest or settings file. |
 | `-Silent` | No prompts. Failures become the exit code. |
 | `-DryRun` | Print each `yt-dlp` command, download nothing, keep the queue. |
-| `-Status` | Print the last completed run. Exit code 1 when it had failures. |
+| `-Status` | Print the last completed run, including anything skipped. Exit code 1 when it had failures. |
+| `-Rollback` | Swap the previous `yt-dlp` build back in, then exit. |
 | `-Doctor` | Self-check of engine, cookies, folders, lock and a live probe. |
 | `-SetupOnly` | Install or update the engine, then exit. |
 | `-VideoQuality`, `-AudioFormat`, `-OutputFolder` | Override one run. |
@@ -80,13 +81,15 @@ Paste a playlist URL like any other link. The whole playlist downloads in a sing
 
 Windows: `scheduler.bat`, choose an interval, and option 3 for one pass right away.
 
-Linux, every four hours:
+Linux: `./scheduler.sh` does the same through a systemd user timer. Option 3 runs one silent pass now, option 4 shows the timer and the last pass. To keep the timer running after you log out, run `loginctl enable-linger $USER` once.
+
+A plain cron entry works too, every four hours:
 
 ```bash
 0 */4 * * * cd /path/to/Digital-Reaper && pwsh -NoProfile -File digitalReaper.ps1 -Silent >> engine/cron.log 2>&1
 ```
 
-`-Status` is the quickest way to see what the last pass did.
+`-Status` is the quickest way to see what the last pass did. Interrupted transfers left as `.part` files are reported at the start and end of a run, and resume on the next one.
 
 ## When something breaks
 
@@ -95,3 +98,5 @@ Linux, every four hours:
 If the tool says another instance is running but no window is open, delete `engine/reaper.lock`. If PowerShell blocks the script, run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`.
 
 A download that fails often needs cookies: set `cookieSource` to `chrome`, `edge` or `firefox`, or point `cookieFile` at an exported `cookies.txt`.
+
+If a `yt-dlp` update breaks downloads, run `dr -Rollback`: the previous build is kept as `engine/yt-dlp.exe.backup`, and a binary that will not start is restored from it automatically. Set `autoUpdate` to `false` to stay on the older release.

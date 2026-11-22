@@ -16,7 +16,8 @@ param(
     [switch]$DryRun,
     [string]$VideoQuality = "",
     [string]$AudioFormat = "",
-    [string]$OutputFolder = ""
+    [string]$OutputFolder = "",
+    [switch]$Rollback
 )
 
 # Windows PowerShell 5.1 can still negotiate TLS 1.0, which GitHub rejects. Without
@@ -118,6 +119,18 @@ $script:LogFilePath = Join-Path $script:EngineDir "reaper.log"
 # Machine-readable outcome of the last completed run, so a silent or scheduled pass
 # can be asked what it did without digging through the log.
 $script:RunStateFile = Join-Path $script:EngineDir "last-run.json"
+
+# Every finished download records its video id against the file on disk, so a
+# re-pasted link is skipped even when its title - and therefore its file name -
+# changed between runs. Audio and video are kept apart: one must not shadow the other.
+$script:DownloadIndexFile = Join-Path $script:EngineDir "downloaded-index.tsv"
+
+# yt-dlp appends "id<TAB>final path" here after each finished move. That beats
+# guessing which file in the folder belongs to this attempt from timestamps.
+$script:MoveRecordFile = Join-Path $script:EngineDir "last-move.tsv"
+
+# Set by Confirm-DownloadedMedia when a link was skipped rather than fetched.
+$script:LastItemSkipped = $false
 
 # --- Bot-guard tuning -------------------------------------------------------
 # Ordered YouTube player clients, tried ONLY after a bot check is hit. yt-dlp's
@@ -305,6 +318,114 @@ function Get-NewMediaFiles {
         Where-Object { $extensions -contains $_.Extension.ToLower() -and $_.LastWriteTime -ge $threshold })
 }
 
+# yt-dlp skips a link when its file name already exists, which stops working the
+# moment a title changes. The index remembers the video id behind each finished
+# file, so the same link is recognised without a request and without relying on
+# the name.
+function Get-MediaIdFromUrl {
+    param([string]$Url)
+
+    if ([string]::IsNullOrWhiteSpace($Url)) { return "" }
+    $patterns = @(
+        'youtu\.be/([A-Za-z0-9_-]{11})',
+        'youtube\.com/(?:watch\?(?:[^#]*&)?v=|shorts/|embed/|live/|v/)([A-Za-z0-9_-]{11})'
+    )
+    foreach ($pattern in $patterns) {
+        if ($Url -match $pattern) { return $Matches[1] }
+    }
+    return ""
+}
+
+function Read-DownloadIndex {
+    $entries = @()
+    if (-not (Test-Path -LiteralPath $script:DownloadIndexFile)) { return $entries }
+    foreach ($line in @(Get-Content -LiteralPath $script:DownloadIndexFile -ErrorAction SilentlyContinue)) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $parts = $line -split "`t", 3
+        if ($parts.Count -lt 3) { continue }
+        $entries += [pscustomobject]@{ Type = $parts[0]; Id = $parts[1]; Path = $parts[2] }
+    }
+    return $entries
+}
+
+function Write-DownloadIndex {
+    param($Entries)
+    try {
+        $lines = @(foreach ($entry in @($Entries)) { "$($entry.Type)`t$($entry.Id)`t$($entry.Path)" })
+        Set-Content -LiteralPath $script:DownloadIndexFile -Value $lines -Encoding UTF8 -ErrorAction Stop
+    }
+    catch {
+        # Bookkeeping must never fail the download it describes.
+    }
+}
+
+# Returns the file this link already produced, or "" when it still has to be
+# fetched. A recorded path that no longer exists is dropped: the user deleted or
+# moved the file, and silently retiring the link would lose it for good.
+function Find-DownloadedMedia {
+    param([string]$Url, [string]$DownloadType)
+
+    $id = Get-MediaIdFromUrl -Url $Url
+    if (-not $id) { return "" }
+    $entries = @(Read-DownloadIndex)
+    $entry = $entries | Where-Object { $_.Type -eq $DownloadType -and $_.Id -eq $id } | Select-Object -First 1
+    if (-not $entry) { return "" }
+    if (Test-Path -LiteralPath $entry.Path) { return $entry.Path }
+
+    Write-DownloadIndex -Entries @($entries | Where-Object { -not ($_.Type -eq $DownloadType -and $_.Id -eq $id) })
+    return ""
+}
+
+# yt-dlp writes one "id<TAB>path" line per finished item. Read once, then use the
+# paths for the read-back check and the ids for the repeat index.
+function Get-MoveRecords {
+    $records = @()
+    if ([string]::IsNullOrWhiteSpace($script:MoveRecordFile) -or -not (Test-Path -LiteralPath $script:MoveRecordFile)) { return $records }
+    foreach ($line in @(Get-Content -LiteralPath $script:MoveRecordFile -ErrorAction SilentlyContinue)) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $parts = $line -split "`t", 2
+        if ($parts.Count -lt 2) { continue }
+        $id = $parts[0].Trim()
+        $path = $parts[1].Trim()
+        if (-not $id -or -not $path) { continue }
+        $records += [pscustomobject]@{ Id = $id; Path = $path }
+    }
+    return $records
+}
+
+# Only a file that is still on disk is worth remembering; the rest was deleted or
+# moved by the user, and the link has to stay downloadable.
+function Import-MoveRecords {
+    param([string]$DownloadType, $Records)
+
+    $present = @(@($Records) | Where-Object { $_ -and (Test-Path -LiteralPath $_.Path) })
+    if ($present.Count -eq 0) { return }
+    $entries = @(Read-DownloadIndex)
+    foreach ($record in $present) {
+        $entries = @($entries | Where-Object { -not ($_.Type -eq $DownloadType -and $_.Id -eq $record.Id) })
+        $entries += [pscustomobject]@{ Type = $DownloadType; Id = $record.Id; Path = $record.Path }
+    }
+    Write-DownloadIndex -Entries $entries
+}
+
+# Interrupted transfers are left by yt-dlp as <name>.part and resumed next run.
+# Reporting them makes a half-finished download visible instead of it looking like
+# a file that simply came out smaller.
+function Get-PartFileReport {
+    param([string[]]$Path)
+
+    $count = 0
+    $bytes = [int64]0
+    foreach ($folder in @($Path)) {
+        if (-not $folder -or -not (Test-Path -LiteralPath $folder)) { continue }
+        foreach ($part in @(Get-ChildItem -LiteralPath $folder -Recurse -File -Filter "*.part" -ErrorAction SilentlyContinue)) {
+            $count++
+            $bytes += $part.Length
+        }
+    }
+    return [pscustomobject]@{ Count = $count; Bytes = $bytes }
+}
+
 function Test-MediaFileIntegrity {
     param([string]$Path, [string]$DownloadType)
 
@@ -399,11 +520,38 @@ function Confirm-DownloadedMedia {
         [hashtable]$Settings
     )
 
-    $candidates = @(Get-NewMediaFiles -Path $OutputDir -Since $Since -DownloadType $DownloadType |
-        Sort-Object LastWriteTime -Descending)
+    $script:LastItemSkipped = $false
+
+    # yt-dlp reports the exact file it finished, so verify that file instead of
+    # guessing from timestamps. The scan stays as the fallback for a record that
+    # was not written.
+    $records = @(Get-MoveRecords)
+    if ($records.Count -gt 0) {
+        $found = @(foreach ($record in $records) {
+            $item = Get-Item -LiteralPath $record.Path -ErrorAction SilentlyContinue
+            if ($item) { $item }
+        })
+        $candidates = @($found | Sort-Object LastWriteTime -Descending)
+        if ($candidates.Count -eq 0) {
+            # yt-dlp called the file finished and it is not there. That is never a
+            # success: the link would be retired with nothing on disk.
+            return [pscustomobject]@{
+                Kind      = "Incomplete"
+                ErrorText = "ERROR: yt-dlp reported a finished file that is no longer on disk."
+            }
+        }
+    }
+    else {
+        $candidates = @(Get-NewMediaFiles -Path $OutputDir -Since $Since -DownloadType $DownloadType |
+            Sort-Object LastWriteTime -Descending)
+    }
     if ($candidates.Count -eq 0) {
-        # Nothing was written: yt-dlp skipped an item it already had. That is a
-        # normal result, not a reason to keep the link queued forever.
+        # Nothing was written: yt-dlp answered "has already been downloaded", so this
+        # folder already holds the video and the repeat is ignored. Retire the link
+        # and say so, instead of leaving it looking like a failure. An interrupted
+        # download is not this case: yt-dlp resumes its .part file instead.
+        Show-ProgressUpdate "[=] Already downloaded - skipped" -Type "System"
+        $script:LastItemSkipped = $true
         return $null
     }
 
@@ -420,6 +568,9 @@ function Confirm-DownloadedMedia {
             ErrorText = "ERROR: the finished file is unusable - $reason"
         }
     }
+
+    # Remember which ids are on disk, so a re-pasted link is recognised next time.
+    Import-MoveRecords -DownloadType $DownloadType -Records $records
 
     return $null
 }
@@ -903,6 +1054,51 @@ function Set-ExecutablePermission {
     }
 }
 
+# Swaps the kept build back in. Kept separate from the update path so it can also
+# run on its own: a release that breaks extraction is undone with -Rollback.
+function Restore-YtDlpBackup {
+    param([switch]$Quiet)
+
+    $backupPath = "$($script:YtDlpPath).backup"
+    if (-not (Test-Path -LiteralPath $backupPath)) {
+        if (-not $Quiet) { Show-ProgressUpdate "[!] No previous yt-dlp is kept - nothing to roll back to." -Type "Warning" }
+        return 1
+    }
+
+    $swapPath = "$($script:YtDlpPath).swap"
+    try {
+        if (Test-Path -LiteralPath $script:YtDlpPath) {
+            if ($script:IsWindowsPlatform) { (Get-Item $script:YtDlpPath -Force).Attributes = [System.IO.FileAttributes]::Normal }
+            Copy-Item -LiteralPath $script:YtDlpPath -Destination $swapPath -Force
+        }
+        Copy-Item -LiteralPath $backupPath -Destination $script:YtDlpPath -Force
+        if (-not (Set-ExecutablePermission -Path $script:YtDlpPath)) { throw "could not make yt-dlp executable" }
+
+        # The restored build has to run before the swap counts as done.
+        $version = [string]((& $script:YtDlpPath --version 2>&1) | Select-Object -First 1)
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) { throw "the kept yt-dlp did not run" }
+
+        if (Test-Path -LiteralPath $swapPath) { Move-Item -LiteralPath $swapPath -Destination $backupPath -Force }
+        Set-HiddenAttribute -Path $script:YtDlpPath
+
+        # version.txt follows the binary, otherwise the next update check compares
+        # against a version that is no longer installed.
+        Set-Content -Path $script:VersionFilePath -Value $version
+        if (-not $Quiet) {
+            Show-ProgressUpdate "[+] Rolled back to yt-dlp $version. Set autoUpdate false to keep it." -Type "Success"
+        }
+        return 0
+    }
+    catch {
+        if (Test-Path -LiteralPath $swapPath) {
+            Copy-Item -LiteralPath $swapPath -Destination $script:YtDlpPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $swapPath -Force -ErrorAction SilentlyContinue
+        }
+        if (-not $Quiet) { Show-ProgressUpdate "[!] Rollback failed: $($_.Exception.Message)" -Type "Error" }
+        return 1
+    }
+}
+
 function Install-YtDlp {
     Show-ProgressUpdate "[~] yt-dlp not found - downloading latest release..." -Type "Update"
 
@@ -1286,9 +1482,17 @@ function Initialize-DigitalReaper {
         # quarantined binary would otherwise fail later, mid-download.
         $null = & $script:YtDlpPath --version 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Show-ProgressUpdate "[!] yt-dlp is present but not runnable - reinstalling" -Type "Warning"
-            Remove-Item -Path $script:YtDlpPath -Force -ErrorAction SilentlyContinue
-            if (-not (Install-YtDlp)) { return $false }
+            # The one case where the kept build is the fix, and trying it costs
+            # nothing: no network, no download.
+            if ((Restore-YtDlpBackup -Quiet) -eq 0) {
+                Show-ProgressUpdate "[!] yt-dlp was not runnable - restored the previous build." -Type "Warning"
+                $null = & $script:YtDlpPath --version 2>&1
+            }
+            if ($LASTEXITCODE -ne 0) {
+                Show-ProgressUpdate "[!] yt-dlp is present but not runnable - reinstalling" -Type "Warning"
+                Remove-Item -Path $script:YtDlpPath -Force -ErrorAction SilentlyContinue
+                if (-not (Install-YtDlp)) { return $false }
+            }
         }
     }
     
@@ -1396,7 +1600,9 @@ function Update-YtDlpSilent {
                     Move-Item -Path $incomingPath -Destination $YtDlpPath -Force -ErrorAction Stop
                     Set-HiddenAttribute -Path $YtDlpPath
                     Set-Content -Path $VersionFilePath -Value $latestVersion
-                    if (Test-Path $backupPath) { Remove-Item $backupPath -Force -ErrorAction SilentlyContinue }
+                    # The previous build stays beside the new one. The next update
+                    # replaces it, and -Rollback (or a binary that will not run) can
+                    # put it back without any network access.
 
                     return [pscustomobject]@{ Type = "Success"; Message = "yt-dlp updated to $latestVersion" }
                 }
@@ -1616,70 +1822,6 @@ function Invoke-PlaylistDownload {
 # --- YT-DLP ARGUMENT BUILDER & BATCH HELPERS ---
 # ===================================================================
 
-# A title-only name is ambiguous: two different videos can share a title, and
-# yt-dlp answers the second one with "has already been downloaded" instead of
-# fetching it. So the download carries the video id, and the id is dropped again
-# once the file is on disk - unless the clean name is taken, where the id is the
-# only thing that keeps both videos. Set by Add-ClashGuardToTemplate.
-$script:ClashGuardActive = $false
-
-function Add-ClashGuardToTemplate {
-    param([string]$Template)
-
-    $script:ClashGuardActive = $false
-    if ([string]::IsNullOrWhiteSpace($Template)) { return $Template }
-    # A template that already tells items apart needs nothing added, and a user's
-    # own %(id)s must never be stripped afterwards.
-    if ($Template -match '%\(id\)s' -or $Template -match '%\(playlist_index' -or $Template -match '%\(autonumber') { return $Template }
-
-    $marker = '.%(ext)s'
-    $markerIndex = $Template.LastIndexOf($marker)
-    if ($markerIndex -lt 0) { return $Template }
-
-    $script:ClashGuardActive = $true
-    return $Template.Substring(0, $markerIndex) + ' [%(id)s]' + $Template.Substring($markerIndex)
-}
-
-function ConvertTo-CleanDownloadName {
-    param([string]$Name)
-
-    # "Title [dQw4w9WgXcQ].mp4" -> "Title.mp4", and the same for "[id].en.srt".
-    $match = [regex]::Match($Name, '^(?<base>.+) \[(?<id>[A-Za-z0-9_-]{6,})\](?<ext>\..+)$')
-    if (-not $match.Success) { return "" }
-    return $match.Groups['base'].Value + $match.Groups['ext'].Value
-}
-
-# Runs only for names this script tagged, so a user's own %(id)s stays put.
-function Rename-DownloadsToCleanNames {
-    param([string]$OutputDir, [datetime]$Since)
-
-    if (-not $script:ClashGuardActive) { return }
-    if (-not (Test-Path -LiteralPath $OutputDir)) { return }
-
-    # Same slack as Get-NewMediaFiles: FAT timestamps are coarse.
-    $threshold = $Since.AddSeconds(-2)
-    $files = @(Get-ChildItem -LiteralPath $OutputDir -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.LastWriteTime -ge $threshold })
-
-    foreach ($file in $files) {
-        $cleanName = ConvertTo-CleanDownloadName -Name $file.Name
-        if (-not $cleanName -or $cleanName -eq $file.Name) { continue }
-
-        $target = Join-Path -Path $OutputDir -ChildPath $cleanName
-        if (Test-Path -LiteralPath $target) {
-            Show-ProgressUpdate "[!] '$cleanName' is taken - kept the id in $($file.Name)" -Type "Warning"
-            continue
-        }
-
-        try {
-            Move-Item -LiteralPath $file.FullName -Destination $target -ErrorAction Stop
-        }
-        catch {
-            # A locked file just keeps its id; the download itself is fine.
-        }
-    }
-}
-
 function Get-YtDlpArgs {
     param(
         [hashtable]$Settings,
@@ -1795,10 +1937,18 @@ function Get-YtDlpArgs {
     }
 
     $template = if ($OutputTemplate) { $OutputTemplate } else { $Settings.outputTemplate }
-    $template = Add-ClashGuardToTemplate -Template $template
     $outputPath = Join-Path -Path $OutputDir -ChildPath $template
     $ytDlpArgs.Add("-o")
     $ytDlpArgs.Add($outputPath)
+
+    # after_move is a late stage, so this does not turn the download into a
+    # simulate run. The record names the file and its video id, which is what the
+    # read-back check and the repeat index use instead of file timestamps.
+    if ($script:MoveRecordFile) {
+        $ytDlpArgs.Add("--print-to-file")
+        $ytDlpArgs.Add("after_move:%(id)s`t%(filepath)s")
+        $ytDlpArgs.Add($script:MoveRecordFile)
+    }
 
     return $ytDlpArgs
 }
@@ -2102,6 +2252,7 @@ function Write-RunState {
         [string]$Mode,
         [int]$SuccessCount,
         [int]$FailureCount,
+        [int]$SkippedCount = 0,
         [string[]]$Failures = @(),
         [double]$TotalBytes = 0,
         [TimeSpan]$Elapsed = [TimeSpan]::Zero,
@@ -2115,6 +2266,7 @@ function Write-RunState {
             mode       = $Mode
             ok         = $SuccessCount
             failed     = $FailureCount
+            skipped    = $SkippedCount
             bytes      = [int64]$TotalBytes
             seconds    = [int][Math]::Round($Elapsed.TotalSeconds)
             outputDir  = $OutputDir
@@ -2152,10 +2304,14 @@ function Show-LastRunStatus {
 
     $okCount = [int]$state.ok
     $failedCount = [int]$state.failed
+    $skippedCount = [int]$state.skipped
     Write-Line ("   finished   " + $state.finishedAt) -Color "Gray"
     Write-Line ("   mode       " + $state.mode) -Color "Gray"
     Write-Line ("   acquired   " + $okCount) -Color $(if ($okCount -gt 0) { "Green" } else { "DarkGray" })
     Write-Line ("   missed     " + $failedCount) -Color $(if ($failedCount -gt 0) { "Red" } else { "DarkGray" })
+    if ($skippedCount -gt 0) {
+        Write-Line ("   skipped    " + $skippedCount) -Color "DarkGray"
+    }
     if ([double]$state.bytes -gt 0) {
         Write-Line ("   size       " + (Format-FileSize -Bytes ([double]$state.bytes))) -Color "Gray"
     }
@@ -2261,14 +2417,12 @@ function Invoke-YtDlpAttempt {
         }
     }
 
-    # The file is valid, so the temporary id can go now (unless the title is taken).
-    Rename-DownloadsToCleanNames -OutputDir $OutputDir -Since $VerifySince
-
     Register-BotGuardSuccess
     $warningCount = ([regex]::Matches([string]$capture.ErrorText, '(?m)^\s*WARNING')).Count
     Write-WarningLog -Url $Url -WarningText ([string]$capture.ErrorText) -Count $warningCount -Settings $Settings
     return [pscustomobject]@{
         Success   = $true
+        Skipped   = [bool]$script:LastItemSkipped
         ErrorText = [string]$capture.ErrorText
         Kind      = ""
         Digest    = ""
@@ -2315,6 +2469,28 @@ function Invoke-YtDlpForUrl {
         [int]$HeightOverride = 0
     )
 
+    # A link whose file is already on disk is skipped without a request. Playlist
+    # URLs are left alone: one item's id is not the list.
+    if (-not $DryRun -and -not (Test-PlaylistUrl -Url $Url)) {
+        $indexedPath = Find-DownloadedMedia -Url $Url -DownloadType $DownloadType
+        if ($indexedPath) {
+            Show-ProgressUpdate "[=] Already downloaded - skipped" -Type "System"
+            return [pscustomobject]@{
+                Success   = $true
+                Skipped   = $true
+                ErrorText = ""
+                Kind      = ""
+                Digest    = ""
+                Warnings  = 0
+            }
+        }
+    }
+
+    # Each item starts a fresh record; a playlist fills it with one line per item.
+    if (-not $DryRun -and $script:MoveRecordFile) {
+        Remove-Item -LiteralPath $script:MoveRecordFile -Force -ErrorAction SilentlyContinue
+    }
+
     $maxAttempts = [int](Format-InvariantNumber -Value $Settings.outerRetryCount -Default $script:DefaultOuterRetryCount)
     if ($maxAttempts -lt 1) { $maxAttempts = 1 }
     if ($maxAttempts -gt 10) { $maxAttempts = 10 }
@@ -2357,13 +2533,12 @@ function Invoke-YtDlpForUrl {
                 $lastKind = [string]$mediaFailure.Kind
             }
             else {
-                Rename-DownloadsToCleanNames -OutputDir $OutputDir -Since $verifySince
-
                 Register-BotGuardSuccess
                 $warningCount = ([regex]::Matches([string]$attemptResult.ErrorText, '(?m)^\s*WARNING')).Count
                 Write-WarningLog -Url $Url -WarningText ([string]$attemptResult.ErrorText) -Count $warningCount -Settings $Settings
                 return [pscustomobject]@{
                     Success   = $true
+                    Skipped   = [bool]$script:LastItemSkipped
                     ErrorText = [string]$attemptResult.ErrorText
                     Kind      = ""
                     Digest    = ""
@@ -3014,6 +3189,7 @@ function Process-LinkFile {
 
     $successCount = 0
     $failureCount = 0
+    $skippedCount = 0
     $targetNum = 0
     $failures = @()
     $startedAt = Get-Date
@@ -3028,12 +3204,18 @@ function Process-LinkFile {
             $downloadResult = Invoke-YtDlpForUrl -Settings $Settings -DownloadType $DownloadType -OutputDir $OutputDir -Url $urlToUse
             $itemElapsed = Format-Elapsed -Span ((Get-Date) - $itemStart)
             if ($downloadResult.Success) {
-                $successCount++
-                if ($DryRun) {
-                    Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Detail "dry run - link stays queued"
+                if ($downloadResult.Skipped) {
+                    $skippedCount++
+                    Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Detail "already on disk - skipped"
                 }
                 else {
-                    Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Warnings $downloadResult.Warnings
+                    $successCount++
+                    if ($DryRun) {
+                        Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Detail "dry run - link stays queued"
+                    }
+                    else {
+                        Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Warnings $downloadResult.Warnings
+                    }
                 }
                 # Unhook the link the moment it lands. Waiting for the end of the
                 # file meant an interrupted, or a multi-hour, run left finished
@@ -3059,6 +3241,7 @@ function Process-LinkFile {
     return [pscustomobject]@{
         Success  = $successCount
         Failure  = $failureCount
+        Skipped  = $skippedCount
         Failures = $failures
         Bytes    = (Get-RecentFileBytes -Path $OutputDir -Since $startedAt)
     }
@@ -3105,6 +3288,7 @@ function Show-MissionSummary {
     param(
         [int]$SuccessCount,
         [int]$FailureCount,
+        [int]$SkippedCount = 0,
         [string]$OutputDir,
         [string[]]$Failures = @(),
         [double]$TotalBytes = 0,
@@ -3127,6 +3311,9 @@ function Show-MissionSummary {
         Write-Host ("   acquired   " + $SuccessCount) -ForegroundColor $(if ($SuccessCount -gt 0) { "Green" } else { "DarkGray" })
     }
     Write-Host ("   missed     " + $FailureCount) -ForegroundColor $(if ($FailureCount -gt 0) { "Red" } else { "DarkGray" })
+    if ($SkippedCount -gt 0) {
+        Write-Host ("   skipped    " + $SkippedCount) -ForegroundColor "DarkGray"
+    }
     if ($TotalBytes -gt 0) {
         Write-Host ("   size       " + (Format-FileSize -Bytes $TotalBytes)) -ForegroundColor Gray
     }
@@ -3148,10 +3335,11 @@ function Show-MissionSummary {
     Write-Rule
     Write-Host ""
 
-    if ($SuccessCount -gt 0) {
+    # A skip is a finished item: the file is already on disk, so nothing failed.
+    if ($SuccessCount -gt 0 -or $SkippedCount -gt 0) {
         Show-CompletionBanner
     }
-    else {
+    elseif ($FailureCount -gt 0) {
         Show-ProgressUpdate "[!] All downloads failed." -Type "Error"
     }
 }
@@ -3190,6 +3378,7 @@ function Run-BatchMode {
     $script:LastRunFailures = 0
     $batchSuccess = 0
     $batchFailure = 0
+    $batchSkipped = 0
     $batchFailures = @()
     $batchBytes = 0
     $startedAt = Get-Date
@@ -3203,6 +3392,7 @@ function Run-BatchMode {
         $audioResult = Process-LinkFile -FilePath $script:AudioLinksFile -Settings $Settings -DownloadType "audio" -OutputDir $audioDir
         $batchSuccess += $audioResult.Success
         $batchFailure += $audioResult.Failure
+        $batchSkipped += $audioResult.Skipped
         $batchFailures += $audioResult.Failures
         $batchBytes += $audioResult.Bytes
     }
@@ -3211,19 +3401,20 @@ function Run-BatchMode {
         $videoResult = Process-LinkFile -FilePath $script:VideoLinksFile -Settings $Settings -DownloadType "video" -OutputDir $videoDir
         $batchSuccess += $videoResult.Success
         $batchFailure += $videoResult.Failure
+        $batchSkipped += $videoResult.Skipped
         $batchFailures += $videoResult.Failures
         $batchBytes += $videoResult.Bytes
     }
 
     $summaryDir = Get-BaseOutputDir -Settings $Settings
-    Show-MissionSummary -SuccessCount $batchSuccess -FailureCount $batchFailure -OutputDir $summaryDir `
+    Show-MissionSummary -SuccessCount $batchSuccess -FailureCount $batchFailure -SkippedCount $batchSkipped -OutputDir $summaryDir `
         -Failures $batchFailures -TotalBytes $batchBytes -Elapsed ((Get-Date) - $startedAt)
 
     # Scheduled runs report into a hidden window, so leave one line behind that
     # says whether last night's pass actually did anything.
-    Write-RunState -Settings $Settings -Mode "batch" -SuccessCount $batchSuccess -FailureCount $batchFailure `
+    Write-RunState -Settings $Settings -Mode "batch" -SuccessCount $batchSuccess -FailureCount $batchFailure -SkippedCount $batchSkipped `
         -Failures $batchFailures -TotalBytes $batchBytes -Elapsed ((Get-Date) - $startedAt) -OutputDir $summaryDir
-    Write-ReaperLog -Settings $Settings -Message "batch run: $batchSuccess ok, $batchFailure failed"
+    Write-ReaperLog -Settings $Settings -Message "batch run: $batchSuccess ok, $batchSkipped skipped, $batchFailure failed"
     $script:LastRunFailures = $batchFailure
 }
 
@@ -3381,6 +3572,7 @@ function Run-InteractiveMode {
 
     $successCount = 0
     $failureCount = 0
+    $skippedCount = 0
     $failures = @()
     $targetNum = 0
     $startedAt = Get-Date
@@ -3425,12 +3617,18 @@ function Run-InteractiveMode {
             }
             $itemElapsed = Format-Elapsed -Span ((Get-Date) - $itemStart)
             if ($downloadResult.Success) {
-                $successCount++
-                if ($DryRun) {
-                    Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Detail "dry run - link stays queued"
+                if ($downloadResult.Skipped) {
+                    $skippedCount++
+                    Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Detail "already on disk - skipped"
                 }
                 else {
-                    Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Warnings $downloadResult.Warnings
+                    $successCount++
+                    if ($DryRun) {
+                        Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Detail "dry run - link stays queued"
+                    }
+                    else {
+                        Show-ItemResult -Status "ok" -Elapsed $itemElapsed -Warnings $downloadResult.Warnings
+                    }
                 }
                 # Retire the link as soon as it finishes, not at the end of the run:
                 # a stopped run should never keep links that already downloaded.
@@ -3452,12 +3650,12 @@ function Run-InteractiveMode {
         Write-Host ""
     }
 
-    Show-MissionSummary -SuccessCount $successCount -FailureCount $failureCount -OutputDir $outputDir `
+    Show-MissionSummary -SuccessCount $successCount -FailureCount $failureCount -SkippedCount $skippedCount -OutputDir $outputDir `
         -Failures $failures -TotalBytes (Get-RecentFileBytes -Path $outputDir -Since $startedAt) -Elapsed ((Get-Date) - $startedAt)
 
-    Write-RunState -Settings $Settings -Mode "interactive" -SuccessCount $successCount -FailureCount $failureCount `
+    Write-RunState -Settings $Settings -Mode "interactive" -SuccessCount $successCount -FailureCount $failureCount -SkippedCount $skippedCount `
         -Failures $failures -TotalBytes (Get-RecentFileBytes -Path $outputDir -Since $startedAt) -Elapsed ((Get-Date) - $startedAt) -OutputDir $outputDir
-    Write-ReaperLog -Settings $Settings -Message "run: $successCount ok, $failureCount failed :: $outputDir"
+    Write-ReaperLog -Settings $Settings -Message "run: $successCount ok, $skippedCount skipped, $failureCount failed :: $outputDir"
     $script:LastRunFailures = $failureCount
 }
 
@@ -3794,6 +3992,12 @@ function Invoke-Doctor {
 try {
     Clear-Console
 
+    # -Rollback swaps the kept yt-dlp build back in and exits. It touches nothing
+    # else, so it works even when the current binary is too broken to update.
+    if ($Rollback) {
+        exit ([int](Restore-YtDlpBackup))
+    }
+
     # -Status reports the last completed run and touches nothing else, so it works
     # before the engine is installed and from a cron job that already failed.
     if ($Status) {
@@ -3860,6 +4064,15 @@ try {
             if ($settings.autoUpdate -and -not $DryRun) { Update-YtDlpSilent }
         }
 
+        $runDirs = @(
+            (Get-OutputDirForType -Settings $settings -DownloadType "audio"),
+            (Get-OutputDirForType -Settings $settings -DownloadType "video")
+        )
+        $pendingParts = Get-PartFileReport -Path $runDirs
+        if ($pendingParts.Count -gt 0) {
+            Show-ProgressUpdate ("[~] {0} interrupted download(s) on disk ({1}) - resuming those still queued." -f $pendingParts.Count, (Format-FileSize -Bytes ([double]$pendingParts.Bytes))) -Type "Update"
+        }
+
         if ($nextMode -eq "quick") {
             Run-InteractiveMode -Settings $settings -ForceOneClick
         }
@@ -3868,6 +4081,13 @@ try {
         }
         else {
             Run-InteractiveMode -Settings $settings
+        }
+
+        # A .part still sitting there means an item did not finish; saying so is
+        # the difference between "resumed later" and "silently lost".
+        $leftParts = Get-PartFileReport -Path $runDirs
+        if ($leftParts.Count -gt 0) {
+            Show-ProgressUpdate ("[!] {0} interrupted download(s) still pending - they resume on the next run." -f $leftParts.Count) -Type "Warning"
         }
 
         if ($Silent) { break }
