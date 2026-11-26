@@ -75,7 +75,6 @@ $script:FfmpegLocation = $script:EngineDir
 # Shown in messages, so each platform reads its own path separator and setup script.
 $script:SetupHint = if ($script:IsWindowsPlatform) { "setup.bat" } else { "setup.sh" }
 $script:LogDisplayPath = if ($script:IsWindowsPlatform) { "engine\reaper.log" } else { "engine/reaper.log" }
-$script:LockDisplayPath = if ($script:IsWindowsPlatform) { "engine\reaper.lock" } else { "engine/reaper.lock" }
 
 # ffmpeg comes from the distro on Linux, so take it from PATH when engine/ has
 # none. Resolved here rather than in Install-Ffmpeg because -Doctor runs before
@@ -99,8 +98,11 @@ $script:VideoOutputDir = Join-Path $script:DownloadsDir "videos"
 # Tracks the source file used by interactive mode (for post-download cleanup)
 $script:SourceFile = ""
 
-# Lock file — prevents concurrent scheduled runs
+# Lock file — prevents concurrent scheduled runs. The open handle is the lock, not
+# the file: the operating system drops it when the process ends, so a closed window
+# or a killed run cannot leave a lock behind for the next launch to clean up.
 $script:LockFilePath = Join-Path $script:EngineDir "reaper.lock"
+$script:LockStream = $null
 
 # Records the engine process this run spawned, so a run that dies mid-download can
 # be cleaned up on the next launch. This is the only leftover detector that works
@@ -1525,6 +1527,20 @@ function Update-YtDlpSilent {
             [bool]$IsWindowsPlatform
         )
 
+        # This runs in a job's own process, where the script's helpers do not exist.
+        # Calling Set-HiddenAttribute from here failed every update *after* the new
+        # binary was already swapped in, so version.txt was never written and the
+        # whole download was repeated on the next launch.
+        $setHidden = {
+            param([string]$Target)
+            if (-not $IsWindowsPlatform -or -not (Test-Path -LiteralPath $Target)) { return }
+            try {
+                $item = Get-Item -LiteralPath $Target -Force
+                $item.Attributes = $item.Attributes -bor [System.IO.FileAttributes]::Hidden
+            }
+            catch { }
+        }
+
         try {
             $url = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
 
@@ -1598,7 +1614,7 @@ function Update-YtDlpSilent {
 
                     Remove-Item -Path $YtDlpPath -Force -ErrorAction SilentlyContinue
                     Move-Item -Path $incomingPath -Destination $YtDlpPath -Force -ErrorAction Stop
-                    Set-HiddenAttribute -Path $YtDlpPath
+                    & $setHidden $YtDlpPath
                     Set-Content -Path $VersionFilePath -Value $latestVersion
                     # The previous build stays beside the new one. The next update
                     # replaces it, and -Rollback (or a binary that will not run) can
@@ -1610,7 +1626,7 @@ function Update-YtDlpSilent {
                     if (Test-Path $incomingPath) { Remove-Item $incomingPath -Force -ErrorAction SilentlyContinue }
                     if ((Test-Path $backupPath) -and -not (Test-Path $YtDlpPath)) {
                         Copy-Item $backupPath $YtDlpPath -Force
-                        Set-HiddenAttribute -Path $YtDlpPath
+                        & $setHidden $YtDlpPath
                     }
                     # Report it: a stale yt-dlp is the main cause of sudden bot checks,
                     # and silence here costs the user months of failed extractions.
@@ -2726,30 +2742,38 @@ function Invoke-YtDlpAndCapture {
     }
 }
 
+# The handle is held for the whole run and released by the operating system when
+# the process ends, however it ends. A leftover file is therefore only litter, never
+# a reason to refuse the launch, so there is nothing to validate or clear.
 function Enter-ReaperLock {
-    if (Test-Path $script:LockFilePath) {
-        if (Test-StaleReaperLock) {
-            Show-ProgressUpdate "[~] Clearing a stale lock left by a previous run." -Type "Warning"
-            Remove-Item $script:LockFilePath -Force -ErrorAction SilentlyContinue
-        }
-        else {
-            return $false
-        }
-    }
-
-    # CreateNew makes "someone else got here first" atomic. A plain Test-Path
-    # followed by Set-Content let two launches in the same second both believe
-    # they owned the lock, and both then wrote over each other's PID.
     try {
-        $stream = [System.IO.File]::Open($script:LockFilePath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        if (-not (Test-Path -LiteralPath $script:LockFilePath)) {
+            # Written before the handle is taken, so the hidden attribute can be set.
+            Set-Content -LiteralPath $script:LockFilePath -Value "" -NoNewline -Encoding UTF8
+            Set-HiddenAttribute -Path $script:LockFilePath
+        }
+
+        # Windows enforces the share mode, so sharing reads keeps the pid readable for
+        # the "already running" line while a second writer is still refused. Unix has
+        # only advisory flock, and .NET maps it to an exclusive lock for FileShare.None
+        # alone - every other value is shared, which would let a second run in.
+        $share = if ($script:IsWindowsPlatform) { [System.IO.FileShare]::Read } else { [System.IO.FileShare]::None }
+        $stream = [System.IO.File]::Open(
+            $script:LockFilePath,
+            [System.IO.FileMode]::OpenOrCreate,
+            [System.IO.FileAccess]::ReadWrite,
+            $share)
         try {
+            $stream.SetLength(0)
             $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]$PID)
             $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush()
         }
-        finally {
+        catch {
             $stream.Dispose()
+            throw
         }
-        Set-HiddenAttribute -Path $script:LockFilePath
+        $script:LockStream = $stream
         return $true
     }
     catch [System.IO.IOException] {
@@ -2762,13 +2786,15 @@ function Enter-ReaperLock {
 }
 
 function Exit-ReaperLock {
-    if (-not (Test-Path $script:LockFilePath)) { return }
-    try {
-        $raw = ([string](Get-Content -Path $script:LockFilePath -Raw -ErrorAction Stop)).Trim()
-        if ($raw -ne [string]$PID) { return }
+    if (-not $script:LockStream) { return }
+    try { $script:LockStream.Dispose() } catch { }
+    $script:LockStream = $null
+
+    # Litter only: the handle already settled who owned the lock, so the file goes
+    # away when it is the one this run wrote.
+    if ((Get-LockHolderPid) -eq [string]$PID) {
+        Remove-Item -LiteralPath $script:LockFilePath -Force -ErrorAction SilentlyContinue
     }
-    catch { return }
-    Remove-Item -Path $script:LockFilePath -Force -ErrorAction SilentlyContinue
 }
 
 function Get-ComparableProcessPath {
@@ -2997,51 +3023,37 @@ function Invoke-YtDlpCaptureOutput {
     }
 }
 
-# A crashed run (or a closed window) leaves engine/reaper.lock behind, so the lock
-# has to be validated before it is trusted. "Is that PID alive" is NOT enough:
-# Windows recycles PIDs, and a recycled number belonging to some unrelated app used
-# to look like a running instance and block every launch.
-function Test-StaleReaperLock {
-    if (-not (Test-Path $script:LockFilePath)) { return $true }
-
-    $raw = ""
-    try { $raw = ([string](Get-Content -Path $script:LockFilePath -Raw -ErrorAction Stop)).Trim() }
-    catch { return $true }
-
-    $lockPid = 0
-    if (-not [int]::TryParse($raw, [ref]$lockPid)) { return $true }
-    if ($lockPid -eq $PID) { return $true }
-    if ($lockPid -le 0) { return $true }
-
-    $owner = Get-Process -Id $lockPid -ErrorAction SilentlyContinue
-    if ($null -eq $owner) { return $true }
-
-    $lockWritten = $null
+# Reading the holder's pid needs both sides to share: the owner holds the file for
+# writing and shares only reads.
+function Get-LockHolderPid {
     try {
-        $lockWritten = (Get-Item $script:LockFilePath -Force).LastWriteTime
-    }
-    catch {
-        $lockWritten = $null
-    }
-
-    if ($null -ne $lockWritten) {
+        $stream = [System.IO.File]::Open(
+            $script:LockFilePath,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
         try {
-            # The real owner was already running when it wrote the lock. A process
-            # that started afterwards cannot be it - that is a recycled PID.
-            if ($owner.StartTime -gt $lockWritten.AddSeconds(10)) { return $true }
-            return $false
+            $reader = New-Object System.IO.StreamReader($stream)
+            return $reader.ReadToEnd().Trim()
         }
-        catch {
-            # StartTime can be unreadable for protected processes; fall through to age.
+        finally {
+            $stream.Dispose()
         }
     }
+    catch { return "" }
+}
 
-    # Last resort: never let an abandoned lock block forever.
-    if ($null -ne $lockWritten) {
-        $age = (Get-Date) - $lockWritten
-        if ($age.TotalHours -gt 12) { return $true }
+# Only an open handle counts as held; a file left by a crashed run opens fine and
+# is taken over silently.
+function Test-ReaperLockHeld {
+    if (-not (Test-Path -LiteralPath $script:LockFilePath)) { return $false }
+    try {
+        $probe = [System.IO.File]::Open($script:LockFilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        $probe.Dispose()
+        return $false
     }
-    return $false
+    catch [System.IO.IOException] { return $true }
+    catch { return $false }
 }
 
 # ===================================================================
@@ -3888,19 +3900,16 @@ function Invoke-Doctor {
     }
 
     # --- session lock ---
-    if (Test-Path $script:LockFilePath) {
-        if (Test-StaleReaperLock) {
-            Remove-Item -Path $script:LockFilePath -Force -ErrorAction SilentlyContinue
-            Write-DoctorLine "WARN" "session lock" "stale lock from a dead run removed"
-            $warnings++
-        }
-        else {
-            $holder = ([string](Get-Content $script:LockFilePath -Raw -ErrorAction SilentlyContinue)).Trim()
-            Write-DoctorLine "FAIL" "session lock" "another instance is running (pid $holder)"
-            $failures++
-        }
+    if (Test-ReaperLockHeld) {
+        $holder = Get-LockHolderPid
+        $detail = if ($holder) { " (pid $holder)" } else { "" }
+        Write-DoctorLine "FAIL" "session lock" "another instance is running$detail"
+        $failures++
     }
     else {
+        # A file left by a dead run is litter, not a lock: Enter-ReaperLock takes it
+        # over. Deleting it here could also unlink a lock a run had just taken, so
+        # the check only reports.
         Write-DoctorLine "OK" "session lock" "free"
     }
 
@@ -4031,10 +4040,11 @@ try {
 
     # One session lock for every mode (batch, interactive, scheduled).
     if (-not (Enter-ReaperLock)) {
-        $holder = ""
-        try { $holder = ([string](Get-Content $script:LockFilePath -Raw -ErrorAction SilentlyContinue)).Trim() } catch { }
-        Show-ProgressUpdate "[!] Another instance is already running (pid $holder). Exiting." -Type "Warning"
-        Show-ProgressUpdate "    If no other window is open, delete $script:LockDisplayPath and start again." -Type "Warning"
+        # The pid is readable on Windows only: an exclusive flock on Unix also keeps
+        # other .NET processes from reading the file.
+        $holder = Get-LockHolderPid
+        $detail = if ($holder) { " (pid $holder)" } else { "" }
+        Show-ProgressUpdate "[!] Another instance is already running$detail. Exiting." -Type "Warning"
         if (-not $Silent) { Read-Host "Press Enter to exit..." }
         exit 1
     }

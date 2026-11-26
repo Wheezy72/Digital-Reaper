@@ -95,7 +95,7 @@ A plain cron entry works too, every four hours:
 
 `dr /doctor` checks the binaries, the JS runtime, cookies, folder permissions, the session lock and a real extraction. Every `[FAIL]` line says what to fix.
 
-If the tool says another instance is running but no window is open, delete `engine/reaper.lock`. If PowerShell blocks the script, run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`.
+Only one run at a time: a second launch says so and exits, and the `engine/reaper.lock` a closed window leaves behind never blocks the next one. On Linux that guard is an advisory `flock`, so only other .NET processes respect it, and a filesystem without lock support (NFS, WSL's `/mnt/c`) does not enforce it at all - run from a local disk if it has to hold. If PowerShell blocks the script, run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`.
 
 A download that fails often needs cookies: set `cookieSource` to `chrome`, `edge` or `firefox`, or point `cookieFile` at an exported `cookies.txt`.
 
